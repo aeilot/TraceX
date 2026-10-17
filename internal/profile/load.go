@@ -332,7 +332,9 @@ func loadARIES(root string, cache *recordCache) (Profile, error) {
 			spans = append(spans, x)
 		}
 	}
-	p.Warnings = appendUnique(p.Warnings, "Lifecycle phases require explicit start/end events; absent phase boundaries are unavailable.")
+	if phaseErr != nil || len(phases) == 0 {
+		p.Warnings = appendUnique(p.Warnings, "Lifecycle phases require explicit start/end events; absent phase boundaries are unavailable.")
+	}
 	var resources []timedResource
 	invalid := 0
 	opaque := false

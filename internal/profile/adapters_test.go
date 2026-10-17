@@ -142,9 +142,9 @@ func TestLiveTaskDiscoveryRequiresEvidence(t *testing.T) {
 }
 func TestConfigurationPreservesIndependentResourceOverrides(t *testing.T) {
 	root := t.TempDir()
-	write(t, root, "run-profile.json", `{"harness_cpu_limit":0,"harness_memory_limit_mb":2048,"sandbox_cpu_limit":4,"sandbox_memory_limit_mb":4096,"temperature":0,"max_tokens":512,"context_length":8192,"reasoning_effort":"high","endpoint":"PRIVATE"}`)
+	write(t, root, "run-profile.json", `{"harness_cpu_limit":0,"harness_memory_limit_mb":2048,"sandbox_cpu_limit":4,"sandbox_memory_limit_mb":4096,"temperature":0,"max_tokens":512,"context_length":8192,"reasoning_effort":"high","agent_timeout_seconds":600,"sandbox_shm_size_mb":256,"task_count":8,"harness_image":"hermes:v1","sandbox_image":"mcp:v1","endpoint":"PRIVATE"}`)
 	config := safeConfiguration(root)
-	if config["harness_cpu_limit"] != float64(0) || config["sandbox_cpu_limit"] != float64(4) || config["temperature"] != float64(0) || config["reasoning_effort"] != "high" {
+	if config["harness_cpu_limit"] != float64(0) || config["sandbox_cpu_limit"] != float64(4) || config["temperature"] != float64(0) || config["reasoning_effort"] != "high" || config["agent_timeout_seconds"] != float64(600) || config["sandbox_shm_size_mb"] != float64(256) || config["task_count"] != float64(8) || config["harness_image"] != "hermes:v1" || config["sandbox_image"] != "mcp:v1" {
 		t.Fatal(config)
 	}
 	if _, ok := config["cpu_limit"]; ok {
@@ -158,7 +158,7 @@ func TestConfigurationPreservesIndependentResourceOverrides(t *testing.T) {
 	if e := Validate(&p); e != nil {
 		t.Fatal(e)
 	}
-	if len(p.Configuration) != 8 {
+	if len(p.Configuration) != 13 {
 		t.Fatal(p.Configuration)
 	}
 }
