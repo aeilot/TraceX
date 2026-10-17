@@ -4,7 +4,7 @@ The P0–P2 implementation was verified locally on macOS/Apple M4 using Go 1.26.
 
 ## TraceX checks
 
-`make check` covers Go unit tests, JavaScript syntax and 19 model/analysis tests, Go race tests, vet, and a binary build. Coverage includes schema v1 migration, v2 multi-parent joins and whole-graph cycles, explicit precedence critical paths, unknown timing, nested concurrency, interval unions, usage coverage/zero values, private-field filtering, resource context, overlapping range queries, stable filtered pages, forward references, SSE replay/cancellation, partial lines, malformed snapshots, truncation/rotation, and native incremental decoding.
+`make check` covers Go unit tests, JavaScript syntax and 25 model/analysis/experiment tests, Go race tests, vet, and a binary build. Coverage includes schema v1 migration, v2 multi-parent joins and whole-graph cycles, explicit precedence critical paths, unknown timing, nested concurrency, interval unions, usage coverage/zero values, private-field filtering, resource context, overlapping range queries, stable filtered pages, forward references, SSE replay/cancellation, partial lines, malformed snapshots, truncation/rotation, and native incremental decoding.
 
 Browser verification covered:
 
@@ -53,3 +53,18 @@ go test ./internal/server -run '^$' -bench 'LargeIndexedView|LargeSnapshotBuild'
 Using ARIES's declared Go 1.26.5 toolchain, Runner/core unit tests, Runner race checks, and the changed scheduling/artifact/snapshot app-file tests and race checks passed. The entire app test package cross-compiled for Linux.
 
 The complete ARIES app test package cannot build natively on this macOS host because existing SGLang process code uses Linux-only `unix.Waitid`, `P_PID`, and `Siginfo` without a Darwin implementation. This pre-existing issue was not changed as part of profiler instrumentation. No paid model runs or new benchmark containers were started for this work.
+
+## Experiment launcher checks
+
+The launcher passes `make check`, including the race detector and configured HTTP API tests. Tests use harmless helper processes rather than ARIES model workloads. Coverage includes private configuration copies, original profile path resolution, task subsets and arrival sequence preservation, model-call acknowledgment, single-job ownership, cancellation, independent outcomes, dynamic source mounts and browser-origin rejection.
+
+An opt-in `TestOrbLifecycle` was exercised against the existing `aries-vm` with a synthetic Python process. It verified shared paths, Linux PID identity checking, actual child SIGINT delivery, a nonzero cancellation exit code and cleanup evidence. The updated ARIES CLI and bridge binaries also built successfully inside that VM. Neither check starts a paid model benchmark.
+
+```sh
+# Optional: requires an existing accessible OrbStack machine and Python 3 there.
+TRACEX_TEST_ORB=aries-vm go test ./internal/experiment -run TestOrbLifecycle -count=1
+```
+
+An isolated Chrome UI check with API fixtures verified selected tasks and concurrency, acknowledgment reset, runner ownership after `stop_failed`, graceful-stop retry, arrival/loop notices and a 390-pixel layout without horizontal overflow. No page errors were observed.
+
+A second browser check exercised the real HTTP server and a harmless local CLI helper without intercepting APIs: workload filtering, two declared tasks reduced to one, concurrency three, prepare completion, run acknowledgment, automatic `run-3` attachment, live DAG/timeline updates, graceful cancellation and confirmed cleanup. Its repeatable browser script is [scripts/launcher-smoke.cjs](../scripts/launcher-smoke.cjs); it refuses catalogs without the explicit synthetic fixture identity. It is not a benchmark invocation script.

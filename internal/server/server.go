@@ -1,4 +1,4 @@
-// Package server serves read-only, indexed run snapshots and the profiler UI.
+// Package server serves indexed run snapshots, the profiler UI, and optional experiment controls.
 package server
 
 import (
@@ -20,6 +20,10 @@ func (ws *workspace) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(r.URL.Path, "/api/") {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
+	}
+	if strings.HasPrefix(r.URL.Path, "/api/experiments/") {
+		ws.experiments(w, r)
+		return
 	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", "GET, HEAD")
@@ -47,7 +51,7 @@ func (ws *workspace) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		name = "index.html"
 	}
-	if name != "index.html" && name != "app.js" && name != "profile.js" && name != "analytics.js" && name != "styles.css" {
+	if name != "index.html" && name != "app.js" && name != "profile.js" && name != "analytics.js" && name != "styles.css" && name != "experiments.js" && name != "experiments.css" && name != "experiment-model.js" {
 		http.NotFound(w, r)
 		return
 	}

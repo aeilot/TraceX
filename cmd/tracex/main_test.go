@@ -89,3 +89,18 @@ func TestDiscoveryErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestExperimentFlagValidation(t *testing.T) {
+	for _, args := range [][]string{
+		{"--aries-dir", ".", "--export", "-"},
+		{"--aries-executor", "remote"},
+		{"--aries-dir", ".", "--aries-executor", "orb"},
+		{"--aries-bin", "aries"},
+		{"--aries-dir", ".", "--aries-machine", "vm"},
+		{"--stop-timeout", "0s"},
+	} {
+		if err := run(context.Background(), args, &bytes.Buffer{}, &bytes.Buffer{}); err == nil {
+			t.Fatalf("expected flag validation: %v", args)
+		}
+	}
+}

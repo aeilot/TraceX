@@ -8,6 +8,8 @@ test:
 	go test ./...
 test-web:
 	node --check web/app.js
+	node --check web/experiments.js
+	node --check web/experiment-model.js
 	node --test web/*.test.cjs
 test-race:
 	go test -race ./...

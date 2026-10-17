@@ -13,6 +13,9 @@
     <script src="/profile.js" defer></script>
     <link rel="stylesheet" href="/styles.css" />
     <script src="/app.js" defer></script>
+    <link rel="stylesheet" href="/experiments.css" />
+    <script src="/experiment-model.js" defer></script>
+    <script src="/experiments.js" defer></script>
   </head>
   <body>
     <aside class="sidebar">
@@ -84,11 +87,26 @@
               work happens.
             </p>
           </div>
+          <div class="experiment-heading-actions"><button id="new-experiment" class="button experiment-primary" aria-expanded="false" aria-controls="experiment-panel">+ New experiment</button>
           <button id="export-button" class="button export">
             ↓ Export JSON
-          </button>
+          </button></div>
         </div>
         <div id="notice" class="notice" role="status" hidden></div>
+        <section id="experiment-panel" class="experiment-panel" aria-label="Run a real ARIES experiment" hidden>
+          <div class="experiment-panel-heading"><div><div class="eyebrow">REAL ARIES EXECUTION</div><h2>New experiment</h2><p>Choose a configured workload and follow its live profile.</p></div><button id="close-experiment" class="button subtle">Close</button></div>
+          <p id="experiment-target" class="experiment-target"></p>
+          <p id="experiment-message" role="status"></p>
+          <pre id="experiment-config" hidden>tracex --aries-dir ROOT --aries-executor orb --aries-machine aries-vm</pre>
+          <form id="experiment-form">
+            <div class="experiment-fields"><label>Find a workload<input id="experiment-filter" type="search" placeholder="Workload, harness, model…" /></label><label>Profile preset<select id="experiment-profile"></select></label><label>Concurrency<input id="experiment-concurrency" type="number" min="1" step="1" value="1" required /></label></div>
+            <p id="experiment-profile-details"></p><p id="experiment-schedule" class="experiment-warning" hidden></p>
+            <fieldset class="experiment-tasks"><legend>Workload tasks <span id="experiment-task-count"></span></legend><div class="experiment-task-actions"><button id="experiment-select-all" class="button small" type="button">Select all</button><button id="experiment-clear" class="button subtle small" type="button">Clear</button></div><div id="experiment-task-list"></div></fieldset>
+            <label class="experiment-ack"><input id="experiment-ack" type="checkbox" /><span id="experiment-ack-label">I acknowledge real model calls may incur provider charges.</span></label>
+            <div class="experiment-submit"><button id="experiment-prepare" class="button" type="button">Prepare data &amp; images</button><button id="experiment-start" class="button experiment-primary" type="submit">Start experiment</button></div><p class="experiment-help">Preparation runs ARIES setup without model calls. Runs use the credentials and endpoints in the selected profile.</p><p id="experiment-validation" role="status"></p>
+          </form>
+          <div class="experiment-jobs-heading"><h3>Experiment jobs</h3><button id="experiment-reload" class="button subtle small">Refresh jobs</button></div><div id="experiment-jobs" aria-live="polite"></div>
+        </section>
         <section class="run-card" aria-label="Run summary">
           <div class="run-identity">
             <div class="run-symbol">⌘</div>

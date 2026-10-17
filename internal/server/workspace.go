@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"github.com/aeilot/TraceX/internal/experiment"
 	"github.com/aeilot/TraceX/internal/profile"
 	"net/http"
 	"os"
@@ -19,7 +20,10 @@ type Source struct {
 	Name    string
 	Profile *profile.Profile
 }
-type Options struct{ WatchInterval time.Duration }
+type Options struct {
+	WatchInterval time.Duration
+	Experiment    *experiment.Config
+}
 type snapshot struct {
 	p         profile.Profile
 	analysis  any
@@ -45,13 +49,16 @@ type notice struct {
 	Sequence uint64 `json:"-"`
 }
 type workspace struct {
-	mu        sync.RWMutex
-	mounts    []*mounted
-	interval  time.Duration
-	seq       uint64
-	history   []notice
-	listeners map[chan notice]bool
-	ctx       context.Context
+	mu         sync.RWMutex
+	refreshMu  sync.Mutex
+	experiment *experiment.Manager
+	sourceJobs map[string]string
+	mounts     []*mounted
+	interval   time.Duration
+	seq        uint64
+	history    []notice
+	listeners  map[chan notice]bool
+	ctx        context.Context
 }
 
 func NewWorkspace(ctx context.Context, sources []Source, opts Options) (http.Handler, error) {
@@ -61,7 +68,7 @@ func NewWorkspace(ctx context.Context, sources []Source, opts Options) (http.Han
 	if opts.WatchInterval < 0 {
 		return nil, fmt.Errorf("negative watch interval")
 	}
-	ws := &workspace{interval: opts.WatchInterval, listeners: map[chan notice]bool{}, ctx: ctx}
+	ws := &workspace{interval: opts.WatchInterval, listeners: map[chan notice]bool{}, sourceJobs: map[string]string{}, ctx: ctx}
 	for _, src := range sources {
 		loader := profile.NewLoader(src.Path)
 		p := profile.Profile{}
@@ -86,7 +93,19 @@ func NewWorkspace(ctx context.Context, sources []Source, opts Options) (http.Han
 		m.events = newEventTail(eventPath(src.Path))
 		ws.mounts = append(ws.mounts, m)
 	}
-	if opts.WatchInterval > 0 {
+	if opts.Experiment != nil {
+		cfg := *opts.Experiment
+		cfg.OnArtifacts = ws.addSource
+		manager, err := experiment.New(ctx, cfg)
+		if err != nil {
+			return nil, err
+		}
+		ws.experiment = manager
+		if ws.interval == 0 {
+			ws.interval = time.Second
+		}
+	}
+	if ws.interval > 0 {
 		go ws.watch()
 	}
 	return ws, nil
@@ -172,7 +191,12 @@ func (ws *workspace) watch() {
 	}
 }
 func (ws *workspace) refresh() {
-	for i, m := range ws.mounts {
+	ws.refreshMu.Lock()
+	defer ws.refreshMu.Unlock()
+	ws.mu.RLock()
+	mounts := append([]*mounted(nil), ws.mounts...)
+	ws.mu.RUnlock()
+	for i, m := range mounts {
 		if m.source.Path == "" {
 			continue
 		}
@@ -257,12 +281,12 @@ func (ws *workspace) selected(id string) (*snapshot, string) {
 	if id == "" {
 		id = "run-1"
 	}
+	ws.mu.RLock()
+	defer ws.mu.RUnlock()
 	n, e := strconv.Atoi(strings.TrimPrefix(id, "run-"))
 	if e != nil || n < 1 || n > len(ws.mounts) || id != fmt.Sprintf("run-%d", n) {
 		return nil, id
 	}
-	ws.mu.RLock()
-	defer ws.mu.RUnlock()
 	return ws.mounts[n-1].current, id
 }
 func (ws *workspace) query(w http.ResponseWriter, r *http.Request) {
@@ -297,4 +321,50 @@ func (ws *workspace) query(w http.ResponseWriter, r *http.Request) {
 	case "/api/view":
 		ws.view(w, r, s, id)
 	}
+}
+
+// addSource publishes an experiment artifact once it can be parsed. The manager
+// retries while a run is being initialized, so no empty snapshot is invented.
+func (ws *workspace) addSource(jobID, path string) (string, error) {
+	ws.refreshMu.Lock()
+	defer ws.refreshMu.Unlock()
+	ws.mu.Lock()
+	if id := ws.sourceJobs[jobID]; id != "" {
+		ws.mu.Unlock()
+		return id, nil
+	}
+	for i, m := range ws.mounts {
+		if m.source.Path == path {
+			id := fmt.Sprintf("run-%d", i+1)
+			ws.sourceJobs[jobID] = id
+			ws.mu.Unlock()
+			return id, nil
+		}
+	}
+	ws.mu.Unlock()
+	loader := profile.NewLoader(path)
+	p, err := loader.Load()
+	if err != nil {
+		return "", fmt.Errorf("experiment artifacts are not readable yet")
+	}
+	if err = profile.Validate(&p); err != nil {
+		return "", fmt.Errorf("experiment artifacts are not valid yet")
+	}
+	sig, identities := fingerprint(path)
+	m := &mounted{source: Source{Path: path}, current: build(p, 1), signature: sig, otherSignature: signatureExceptEvents(path), identities: identities, loader: loader, events: newEventTail(eventPath(path))}
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+	ws.mounts = append(ws.mounts, m)
+	id := fmt.Sprintf("run-%d", len(ws.mounts))
+	ws.sourceJobs[jobID] = id
+	ws.notifyLocked(notice{RunID: id, Revision: 1})
+	return id, nil
+}
+
+// Close waits for the owned ARIES process to finish graceful shutdown.
+func (ws *workspace) Close(ctx context.Context) error {
+	if ws.experiment == nil {
+		return nil
+	}
+	return ws.experiment.Close(ctx)
 }

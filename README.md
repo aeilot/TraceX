@@ -39,6 +39,18 @@ make build
 ./bin/tracex --help
 ```
 
+## Run real experiments
+
+Enable the **New experiment** panel against a built ARIES checkout:
+
+```sh
+./bin/tracex --aries-dir /absolute/path/to/ARIES
+# macOS, using an existing Linux OrbStack machine:
+./bin/tracex --aries-dir /Users/you/Developer/ARIES --aries-executor orb --aries-machine aries-vm
+```
+
+Select a workload and profile, choose declared tasks and concurrency, prepare prerequisites, then explicitly start the real benchmark. Runs attach automatically to the live DAG and timeline. The panel supports graceful stop and reports process, harness, evaluation and cleanup outcomes separately. Model execution requires acknowledgment; selecting a preset does not start it. See [experiment setup and limits](docs/experiments.md).
+
 ## Explore
 
 - **Agent DAG / timeline / split view:** explicit parent, spawn, call, return, dependency, and multi-parent join relationships. Cyclic graphs are rejected.
@@ -81,7 +93,7 @@ The producer has a finite demonstration sequence. Restart it by truncating the s
 
 ## Local data
 
-The service exposes normalized summaries and bundled assets. It does not serve run directories or raw logs, execute evidence, call models, or upload runs. Prompts, tool arguments, outputs, raw errors, and credentials are excluded by the adapters. Names, IDs, selected metadata, and comparison conditions can still be sensitive; review exports before sharing. Browser imports stay local. Private runs and exports belong outside Git.
+The service exposes normalized summaries and bundled assets. It does not serve run directories or raw logs, execute evidence, or upload runs. With `--aries-dir`, explicitly submitted experiment actions start ARIES, which can call models. Without that flag, the service only inspects evidence. Prompts, tool arguments, outputs, raw errors, and credentials are excluded by the adapters. Names, IDs, selected metadata, and comparison conditions can still be sensitive; review exports before sharing. Browser imports stay local. Private runs and exports belong outside Git.
 
 ## Develop
 

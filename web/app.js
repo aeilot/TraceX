@@ -1542,4 +1542,22 @@ window.addEventListener("resize", () => {
   resizeTimer = setTimeout(renderViews, 150);
 });
 window.addEventListener("beforeunload", () => state.stream?.close());
+window.addEventListener("tracex:open-run", async (event) => {
+  const id = event.detail?.run_id;
+  if (!id) return;
+  try {
+    const data = await json("/api/runs");
+    state.runs = data.runs || [];
+    state.watchInterval = data.watch_interval_ms || 0;
+    if (!state.runs.some((run) => run.id === id)) return;
+    state.runKey = id;
+    resetFilters();
+    $("#resource-filter").replaceChildren(new Option("All runtimes", "all"));
+    updateRunPickers();
+    await loadView();
+    connectEvents();
+  } catch (error) {
+    showError(error);
+  }
+});
 loadSource();
