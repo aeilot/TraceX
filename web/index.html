@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#142c2e" />
+    <title>TraceX — Agent workload profiler</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%277%27 fill=%27%23162f31%27/%3E%3Ctext x=%276%27 y=%2725%27 font-size=%2728%27 fill=%27%23a5dfc9%27%3E↗%3C/text%3E%3C/svg%3E"
+    />
+    <script src="/profile.js" defer></script>
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <aside class="sidebar">
+      <a class="brand" href="/" aria-label="TraceX home"
+        ><span class="brand-icon">↗</span> Trace<span class="brand-x">X</span
+        ><span class="version">0.1</span></a
+      >
+      <div class="workspace-label">OBSERVABILITY WORKSPACE</div>
+      <button id="overview" class="nav-item active">
+        <span>◈</span> Workload explorer <span class="nav-count">1</span>
+      </button>
+      <div class="sidebar-section">
+        <span>THIS RUN</span><span id="task-count">—</span>
+      </div>
+      <div id="task-list" class="task-list" aria-label="Filter by task"></div>
+      <div class="sidebar-bottom">
+        <div class="sidebar-section">DATA SOURCES</div>
+        <div id="capability-list"></div>
+        <div class="local-note">
+          <span class="status-dot"></span> Local workspace<span
+            >Evidence stays on this machine</span
+          >
+        </div>
+        <a
+          class="source-link"
+          href="https://github.com/aeilot/TraceX"
+          target="_blank"
+          rel="noreferrer"
+          >TraceX on GitHub <span>↗</span></a
+        >
+      </div>
+    </aside>
+    <div class="workspace">
+      <header class="topbar">
+        <div class="breadcrumb">
+          Workspace <span>/</span> <strong>Workload explorer</strong>
+        </div>
+        <div class="header-actions">
+          <span class="local-badge"
+            ><span class="status-dot"></span> Local analysis</span
+          ><button id="load-source" class="button subtle">Reset source</button
+          ><button id="import-button" class="button">↑ Import profile</button
+          ><input
+            id="import-file"
+            type="file"
+            accept=".json,application/json"
+            hidden
+          />
+        </div>
+      </header>
+      <main>
+        <div class="page-heading">
+          <div>
+            <div class="eyebrow">AGENT WORKLOAD PROFILER</div>
+            <h1>Every agent. One clear picture.</h1>
+            <p class="page-description">
+              Follow execution paths, inspect timing, and understand where the
+              work happens.
+            </p>
+          </div>
+          <button id="export-button" class="button export">
+            ↓ Export JSON
+          </button>
+        </div>
+        <div id="notice" class="notice" role="status" hidden></div>
+        <section class="run-card" aria-label="Run summary">
+          <div class="run-identity">
+            <div class="run-symbol">⌘</div>
+            <div>
+              <h2 id="run-name">Loading workload…</h2>
+              <div class="run-meta">
+                <span id="run-id">Connecting to local source</span
+                ><span id="dataset-badge" class="tag">—</span>
+              </div>
+            </div>
+            <span class="run-state" id="run-state">Loading</span>
+          </div>
+          <div class="metrics">
+            <div>
+              <span class="metric-label">WALL TIME</span
+              ><strong id="metric-duration">—</strong
+              ><small>Run elapsed time</small>
+            </div>
+            <div>
+              <span class="metric-label">AGENTS</span
+              ><strong id="metric-agents">—</strong
+              ><small>Distinct observed agents</small>
+            </div>
+            <div>
+              <span class="metric-label">EXECUTION SPANS</span
+              ><strong id="metric-spans">—</strong
+              ><small id="metric-span-note">Across all tasks</small>
+            </div>
+            <div>
+              <span class="metric-label">MODEL / TOOL TIME</span
+              ><strong id="metric-active">—</strong
+              ><small>Interval union within each kind</small>
+            </div>
+          </div>
+        </section>
+        <section class="explorer" aria-label="Execution explorer">
+          <div class="explorer-toolbar">
+            <div
+              class="view-tabs"
+              role="group"
+              aria-label="Visualization layout"
+            >
+              <button data-view="split" class="selected" aria-pressed="true">
+                ▦ Split view</button
+              ><button data-view="dag" aria-pressed="false">◇ Agent DAG</button
+              ><button data-view="timeline" aria-pressed="false">
+                ≡ Timeline
+              </button>
+            </div>
+            <div class="filter-tools">
+              <label class="search-box"
+                ><span>⌕</span
+                ><input
+                  id="search"
+                  type="search"
+                  placeholder="Find a span or agent…"
+                  aria-label="Search spans and agents"
+                /><kbd>/</kbd></label
+              ><select id="kind-filter" aria-label="Filter span type">
+                <option value="all">All span types</option>
+              </select>
+            </div>
+          </div>
+          <div class="legend">
+            <span><i class="legend-dot agent"></i>Agent</span
+            ><span><i class="legend-dot model"></i>Model</span
+            ><span><i class="legend-dot tool"></i>Tool</span
+            ><span><i class="legend-dot browser"></i>Browser</span
+            ><span><i class="legend-dot evaluation"></i>Evaluation</span
+            ><span class="legend-explanation"
+              >Relationships from explicit parent IDs</span
+            >
+          </div>
+          <section id="dag-panel" class="visual-panel">
+            <div class="panel-heading">
+              <h3>
+                <span class="panel-icon">◇</span> Agent execution DAG
+                <span id="dag-count" class="count-pill">0</span>
+              </h3>
+              <div class="panel-tools">
+                <span id="dag-note">Select a node to inspect</span
+                ><button
+                  id="fit-graph"
+                  class="icon-button"
+                  aria-label="Fit graph to viewport"
+                  title="Fit graph"
+                >
+                  ⊡
+                </button>
+              </div>
+            </div>
+            <div id="dag-scroll" class="dag-scroll">
+              <svg
+                id="dag"
+                role="group"
+                aria-label="Agent execution directed acyclic graph"
+              ></svg>
+              <div id="dag-empty" class="empty" hidden>
+                No matching execution spans.
+              </div>
+            </div>
+          </section>
+          <section id="timeline-panel" class="visual-panel">
+            <div class="panel-heading">
+              <h3>
+                <span class="panel-icon">≡</span> Linear timeline
+                <span id="timeline-count" class="count-pill">0</span>
+              </h3>
+              <div class="panel-tools">
+                <label class="zoom-label"
+                  >Zoom
+                  <input
+                    id="zoom"
+                    type="range"
+                    min="1"
+                    max="8"
+                    step="0.5"
+                    value="1"
+                    aria-label="Timeline zoom" /></label
+                ><button id="reset-time" class="button subtle small">
+                  Reset
+                </button>
+              </div>
+            </div>
+            <div id="timeline-scroll" class="timeline-scroll">
+              <svg
+                id="timeline"
+                role="group"
+                aria-label="Linear execution timeline"
+              ></svg>
+            </div>
+            <div class="timeline-footer">
+              <span id="time-window">—</span
+              ><span
+                >Hover for timing · Select for evidence · Scroll horizontally
+                when zoomed</span
+              >
+            </div>
+          </section>
+        </section>
+        <section class="resources-card">
+          <div class="panel-heading">
+            <h3><span class="panel-icon">⌁</span> Resource signals</h3>
+            <div class="resource-controls">
+              <select id="resource-filter" aria-label="Resource runtime">
+                <option value="all">All runtimes</option></select
+              ><span class="tag">Observed samples</span>
+            </div>
+          </div>
+          <div class="resource-grid">
+            <div class="resource-chart">
+              <div class="chart-title">
+                <span>CPU utilization</span><strong id="cpu-peak">—</strong>
+              </div>
+              <svg
+                id="cpu-chart"
+                role="img"
+                aria-label="CPU utilization over time"
+              ></svg>
+            </div>
+            <div class="resource-chart">
+              <div class="chart-title">
+                <span>Memory usage</span><strong id="memory-peak">—</strong>
+              </div>
+              <svg
+                id="memory-chart"
+                role="img"
+                aria-label="Memory usage over time"
+              ></svg>
+            </div>
+          </div>
+          <div class="resource-footer">
+            Runtime signals share the timeline axis. Missing measurements remain
+            gaps; shared infrastructure is not attributed to tasks.
+          </div>
+        </section>
+        <section
+          id="coverage"
+          class="coverage-card"
+          aria-label="Evidence coverage"
+        ></section>
+        <footer class="page-footer">
+          <span>TraceX <span class="footer-cross">×</span> ARIES</span
+          ><span>Evidence first. Assumptions visible.</span>
+        </footer>
+      </main>
+    </div>
+    <aside id="inspector" class="inspector" aria-label="Span details" hidden>
+      <div class="inspector-heading">
+        <span>SPAN DETAILS</span
+        ><button
+          id="close-inspector"
+          class="icon-button"
+          aria-label="Close span details"
+        >
+          ×
+        </button>
+      </div>
+      <div id="inspector-content"></div>
+    </aside>
+    <div id="toast" class="toast" role="status" hidden></div>
+  </body>
+</html>

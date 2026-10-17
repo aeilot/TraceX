@@ -1,0 +1,7 @@
+/.cache/
+/bin/
+*.test
+*.prof
+/runs/
+/exports/
+.DS_Store
