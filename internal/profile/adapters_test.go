@@ -274,6 +274,39 @@ func TestResourceNetworkMemoryLimitAndPIDs(t *testing.T) {
 	}
 }
 
+func TestResourceCPUThrottling(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "run-result.json", `{"tasks":[{"task_id":"t","started_at":"2026-01-01T00:00:00Z","duration":3000000000}]}`)
+	write(t, root, "t/monitor/resources.jsonl", `{"time":"2026-01-01T00:00:01Z","component":"sandbox","runtime_id":"r","memory_usage_bytes":1,"cpu_throttling":{"periods":10,"throttled_periods":4,"throttled_us":2500}}
+{"time":"2026-01-01T00:00:02Z","component":"sandbox","runtime_id":"r","memory_usage_bytes":1}
+{"time":"2026-01-01T00:00:03Z","component":"sandbox","runtime_id":"r","memory_usage_bytes":1,"cpu_throttling":{"periods":20,"throttled_periods":30,"throttled_us":1}}
+{"time":"2026-01-01T00:00:04Z","component":"sandbox","runtime_id":"r","memory_usage_bytes":1,"cpu_throttling":{"periods":20}}
+{"time":"2026-01-01T00:00:05Z","component":"sandbox","runtime_id":"r","cpu_throttling":{"periods":0,"throttled_periods":0,"throttled_us":0}}
+`)
+	p, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Resources) != 5 {
+		t.Fatalf("resources %+v", p.Resources)
+	}
+	if c := p.Resources[0].CPUThrottling; c == nil || c.Periods != 10 || c.ThrottledPeriods != 4 || c.ThrottledUS != 2500 {
+		t.Fatalf("throttling %+v", c)
+	}
+	for _, i := range []int{1, 2, 3} {
+		if p.Resources[i].CPUThrottling != nil {
+			t.Fatalf("absent, inconsistent or partial throttling must be unmeasured: %d %+v", i, p.Resources[i].CPUThrottling)
+		}
+	}
+	if c := p.Resources[4].CPUThrottling; c == nil || c.Periods != 0 {
+		t.Fatalf("a measured zero is retained %+v", c)
+	}
+	b, _ := json.Marshal(p.Resources[1])
+	if strings.Contains(string(b), "cpu_throttling") {
+		t.Fatal("unmeasured throttling serialized", string(b))
+	}
+}
+
 func TestBridgeBookkeepingIsNotToolWork(t *testing.T) {
 	root := t.TempDir()
 	write(t, root, "run-result.json", `{"tasks":[{"task_id":"t","started_at":"2026-01-01T00:00:00Z","duration":1000000000}]}`)

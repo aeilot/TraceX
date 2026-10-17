@@ -30,6 +30,7 @@ type snapshot struct {
 	byID      map[string]profile.Span
 	prefixEnd []float64
 	revision  uint64
+	sweep     []profile.SweepTask
 }
 type mounted struct {
 	source         Source
@@ -122,7 +123,7 @@ func build(p profile.Profile, rev uint64) *snapshot {
 		return a.StartMS < b.StartMS
 	})
 	sort.SliceStable(p.Resources, func(i, j int) bool { return p.Resources[i].TimeMS < p.Resources[j].TimeMS })
-	s := &snapshot{p: p, revision: rev, byID: map[string]profile.Span{}, prefixEnd: make([]float64, len(p.Spans)), analysis: profile.Analyze(p)}
+	s := &snapshot{p: p, revision: rev, byID: map[string]profile.Span{}, prefixEnd: make([]float64, len(p.Spans)), analysis: profile.Analyze(p), sweep: profile.SweepSamples(p)}
 	end := 0.0
 	for i, v := range p.Spans {
 		s.byID[v.ID] = v
@@ -320,6 +321,8 @@ func (ws *workspace) query(w http.ResponseWriter, r *http.Request) {
 		ws.reply(w, r, map[string]any{"span": span, "edges": edges, "resource_stats": stats})
 	case "/api/view":
 		ws.view(w, r, s, id)
+	case "/api/sweep":
+		ws.reply(w, r, map[string]any{"run_id": id, "name": s.p.Name, "configuration": s.p.Configuration, "revision": s.revision, "tasks": s.sweep})
 	}
 }
 

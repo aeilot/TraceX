@@ -54,6 +54,10 @@ func TestValidationRejectsInvalidEvidence(t *testing.T) {
 		"negative":          func(p *Profile) { p.Spans[0].DurationMS = -1 },
 		"nan":               func(p *Profile) { p.DurationMS = math.NaN() },
 		"infinite resource": func(p *Profile) { n := math.Inf(1); p.Resources[0].CPUPercent = &n },
+		"throttled beyond periods": func(p *Profile) {
+			p.Resources[0].CPUThrottling = &CPUThrottling{Periods: 1, ThrottledPeriods: 2}
+		},
+		"negative throttling": func(p *Profile) { p.Resources[0].CPUThrottling = &CPUThrottling{ThrottledUS: -1} },
 		"invented edge": func(p *Profile) {
 			p.Edges = append(p.Edges, Edge{Source: "delegate-a", Target: "delegate-b", Kind: "parent"})
 		},

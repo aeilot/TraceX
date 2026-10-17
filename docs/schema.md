@@ -12,7 +12,8 @@ All timing uses finite, nonnegative milliseconds relative to one run origin. Siz
 | Span | `id`, `task_id`, `agent_id`, optional `parent_id` and `runtime_id`, `name`, `kind`, `status`, `start_ms`, `duration_ms`, `source`, optional `attributes`, `usage`, `incomplete` |
 | Usage | optional `input_tokens`, `output_tokens`; missing and measured zero differ |
 | Edge | `source`, `target`, `kind` |
-| Resource | optional `task_id`, `component`, `runtime_id`, `time_ms`, optional `cpu_percent`, `memory_bytes`, `gpu_percent`, `memory_limit_bytes`, `memory_peak_bytes`, `pids`, `network_rx_bytes`, `network_tx_bytes` (cumulative per runtime) |
+| Resource | optional `task_id`, `component`, `runtime_id`, `time_ms`, optional `cpu_percent`, `memory_bytes`, `gpu_percent`, `memory_limit_bytes`, `memory_peak_bytes`, `pids`, `network_rx_bytes`, `network_tx_bytes` (cumulative per runtime), `cpu_throttling` (CPUThrottling) |
+| CPUThrottling | `periods`, `throttled_periods`, `throttled_us`: cumulative cgroup `cpu.stat` counters per runtime; `throttled_periods` ≤ `periods`. Omitted means throttling was not measured, never zero. Shares derive from consecutive samples of one runtime; a counter decrease is a reset and yields no share |
 | Capability | `name`, `status`, optional `reason` |
 
 IDs are unique within each object class. Span/resource task references must resolve. The whole graph, including every edge kind, must be acyclic. A span's `parent_id` derives a parent edge. Repeated edges are deduplicated; explicit edge endpoints must exist.

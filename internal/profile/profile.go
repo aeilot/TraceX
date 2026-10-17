@@ -90,6 +90,17 @@ type Resource struct {
 	PIDs             *float64 `json:"pids,omitempty"`
 	MemoryLimitBytes *float64 `json:"memory_limit_bytes,omitempty"`
 	MemoryPeakBytes  *float64 `json:"memory_peak_bytes,omitempty"`
+	// CPUThrottling is the cumulative cgroup cpu.stat bandwidth counters for
+	// the runtime; nil means throttling was not measured, not that it was zero.
+	CPUThrottling *CPUThrottling `json:"cpu_throttling,omitempty"`
+}
+
+// CPUThrottling counters are cumulative per runtime; shares are derived from
+// consecutive samples of one series and never across a counter reset.
+type CPUThrottling struct {
+	Periods          float64 `json:"periods"`
+	ThrottledPeriods float64 `json:"throttled_periods"`
+	ThrottledUS      float64 `json:"throttled_us"`
 }
 type Capability struct {
 	Name   string `json:"name"`
@@ -280,6 +291,9 @@ func Validate(p *Profile) error {
 			if v != nil && !validTime(*v) {
 				return fmt.Errorf("invalid resource reading")
 			}
+		}
+		if c := r.CPUThrottling; c != nil && (!validTime(c.Periods) || !validTime(c.ThrottledPeriods) || !validTime(c.ThrottledUS) || c.ThrottledPeriods > c.Periods) {
+			return fmt.Errorf("invalid CPU throttling reading")
 		}
 	}
 	if p.Tasks == nil {
