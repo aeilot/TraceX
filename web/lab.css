@@ -917,17 +917,28 @@ h2 {
   }
 }
 /* Language switch and Chinese text. */
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
+.language-switch button {
+  padding: 4px 9px;
+  min-width: 38px;
+}
+.path-node {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  text-align: left;
+}
+.path-name {
+  flex: 1;
+  min-width: 0;
+  color: var(--ink);
   overflow: hidden;
-  clip: rect(0 0 0 0);
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
-#language-picker {
-  font: 11px var(--mono);
-  padding: 4px 6px;
+.path-task,
+.path-duration {
+  color: var(--muted);
+  font-size: 10px;
 }
 :lang(zh-CN) {
   --mono: ui-monospace, "SF Mono", Menlo, "PingFang SC", "Noto Sans Mono CJK SC", monospace;

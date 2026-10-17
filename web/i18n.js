@@ -419,9 +419,10 @@
     ],
   };
   const dictionaries = { "zh-CN": zh };
+  // Code, full name, and the short label on the header switch.
   const languages = [
-    ["en", "English"],
-    ["zh-CN", "简体中文"],
+    ["en", "English", "EN"],
+    ["zh-CN", "简体中文", "中文"],
   ];
   const storageKey = "tracex.language";
 

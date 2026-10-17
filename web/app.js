@@ -585,7 +585,13 @@ function renderAnalysis() {
   const nodes = $("#critical-nodes");
   nodes.replaceChildren();
   for (const id of critical.span_ids || []) {
-    const button = html("button", "path-node", short(id, 32));
+    const label = pathLabel(id),
+      button = html("button", "path-node");
+    button.append(
+      html("span", "path-name", label.name),
+      html("span", "path-task", label.task),
+      html("span", "path-duration", label.duration),
+    );
     button.title = id;
     button.onclick = () => jumpToSpan(id);
     nodes.append(button);
@@ -626,6 +632,25 @@ function renderAnalysis() {
     ],
     rows,
   );
+}
+// pathLabel names a critical-path span readably. IDs share long task
+// prefixes, so the span name (from the page, or the ID's last meaningful
+// segment) and the occurrence number carry the difference.
+function pathLabel(id) {
+  const span = visible().find((s) => s.id === id),
+    parts = id.split("/"),
+    occurrence = /-(\d{3})$/.exec(parts[0])?.[1];
+  let name = span?.name;
+  if (!name) {
+    const last = parts.at(-1);
+    name = (/^\d+$/.test(last) && parts.length > 1 ? parts.at(-2) : last).replaceAll("_", " ");
+    if (name.length > 28) name = "…" + name.slice(-12);
+  }
+  return {
+    name,
+    task: occurrence ? "#" + occurrence : parts.length > 1 ? short(parts[0], 14) : "",
+    duration: span && !span.incomplete ? format(span.duration_ms) : "",
+  };
 }
 function table(target, headers, rows) {
   const t = html("table");
@@ -1739,10 +1764,15 @@ window.addEventListener("tracex:open-run", async (event) => {
   }
 });
 {
-  const i18n = globalThis.TraceXI18n,
-    picker = $("#language-picker");
-  for (const [code, name] of i18n.languages) picker.add(new Option(name, code));
-  picker.value = i18n.language;
-  picker.onchange = () => i18n.setLanguage(picker.value);
+  const i18n = globalThis.TraceXI18n;
+  for (const [code, name, label] of i18n.languages) {
+    const button = html("button", code === i18n.language ? "selected" : "", label);
+    button.lang = code;
+    button.title = name;
+    button.setAttribute("aria-label", name);
+    button.setAttribute("aria-pressed", String(code === i18n.language));
+    button.onclick = () => code !== i18n.language && i18n.setLanguage(code);
+    $("#language-switch").append(button);
+  }
 }
 loadSource();
