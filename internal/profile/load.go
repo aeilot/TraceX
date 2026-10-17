@@ -496,6 +496,9 @@ func loadARIES(root string, cache *recordCache) (Profile, error) {
 				r.PIDs = optionalNumber(v, "pids")
 				r.MemoryLimitBytes = optionalNumber(v, "memory_limit_bytes")
 				r.MemoryPeakBytes = optionalNumber(v, "memory_peak_bytes")
+				if c, ok := v["cpu_throttling"].(map[string]any); ok {
+					r.CPUThrottling = cpuThrottling(c)
+				}
 				if r.MemoryLimitBytes != nil && *r.MemoryLimitBytes == 0 {
 					r.MemoryLimitBytes = nil
 				}
@@ -503,7 +506,7 @@ func loadARIES(root string, cache *recordCache) (Profile, error) {
 					r = Resource{TaskID: r.TaskID, Component: r.Component, RuntimeID: r.RuntimeID}
 					r.GPUPercent = optionalNumber(gpu, "utilization_percent")
 				}
-				if r.CPUPercent == nil && r.MemoryBytes == nil && r.GPUPercent == nil && r.NetworkRxBytes == nil && r.NetworkTxBytes == nil && r.PIDs == nil {
+				if r.CPUPercent == nil && r.MemoryBytes == nil && r.GPUPercent == nil && r.NetworkRxBytes == nil && r.NetworkTxBytes == nil && r.PIDs == nil && r.CPUThrottling == nil {
 					invalid++
 					return
 				}
@@ -700,6 +703,16 @@ func loadARIES(root string, cache *recordCache) (Profile, error) {
 	}
 	return p, nil
 }
+// cpuThrottling keeps a cgroup cpu.stat reading only when all counters are
+// present and consistent; a partial reading is unmeasured rather than zero.
+func cpuThrottling(v map[string]any) *CPUThrottling {
+	periods, throttled, us := optionalNumber(v, "periods"), optionalNumber(v, "throttled_periods"), optionalNumber(v, "throttled_us")
+	if periods == nil || throttled == nil || us == nil || !validTime(*periods) || !validTime(*throttled) || !validTime(*us) || *throttled > *periods {
+		return nil
+	}
+	return &CPUThrottling{Periods: *periods, ThrottledPeriods: *throttled, ThrottledUS: *us}
+}
+
 func appendUnique(v []string, s string) []string {
 	for _, x := range v {
 		if x == s {

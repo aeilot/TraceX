@@ -11,7 +11,7 @@ Pass a completed or active ARIES run directory to `--run`. Completed results sup
 | `aries.log` | Explicit paired task-phase records, measured durations, recorded predecessor IDs |
 | `otel-spans.jsonl` | Timed spans, explicit parents, selected identity and model metadata |
 | `tool-calls.jsonl` | Bridge operation class, completion timestamp, duration, outcome |
-| `resources.jsonl` | CPU percent, memory bytes, memory limit and peak, PID count, cumulative network rx/tx bytes, optional device GPU utilization |
+| `resources.jsonl` | CPU percent, memory bytes, memory limit and peak, PID count, cumulative network rx/tx bytes, optional cumulative `cpu_throttling` (`periods`, `throttled_periods`, `throttled_us`; kept only when all three are present and consistent), optional device GPU utilization |
 | `evaluation/score.json` | Continuous `accuracy` in [0, 1] as the task score; prediction and gold answers are not read into the profile |
 | `harness/session-outcome.json` | `end_reason` enum (for example `completed`, `deadline_exceeded`); free text is dropped |
 | `evaluation/network-summary.json` | Aggregate request, failed, unsent, response-byte, active-time and per-resource-type counts plus navigation count; navigation URLs are never retained |

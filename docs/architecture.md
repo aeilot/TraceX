@@ -28,6 +28,7 @@ ARIES native artifacts / normalized profiles / JSONL events
 | `GET /api/view?run=run-1` | Current filtered page, resource envelope, full-run analysis, counts and revision |
 | `GET /api/span?run=run-1&id=SPAN_ID` | Span, all incident recorded edges, interval resource statistics |
 | `GET /api/analysis?run=run-1` | Full-run analysis |
+| `GET /api/sweep?run=run-1` | Per-task sweep samples: finished duration, model-call and browser-tool local durations, sandbox throttling counter increases, and the run configuration |
 | `GET /api/events` | Reconnectable `revision` server-sent events with event IDs and heartbeats |
 | `GET /api/health` | `{"status":"ok"}` |
 | `GET /api/experiments/catalog` | Allowlisted profile metadata and runner readiness |

@@ -6,6 +6,9 @@ const {
   analyze,
   windowStats,
   page: localPage,
+  throttleShares,
+  sweepSamples,
+  sweepMetrics,
 } = globalThis.TraceXProfile;
 const t9n = globalThis.TraceXI18n.t;
 const $ = (s) => document.querySelector(s),
@@ -201,6 +204,7 @@ function updateRunPickers() {
           : runs.find((r) => r.id !== state.runKey)?.id || state.runKey;
   }
   $(".nav-count").textContent = runs.length;
+  updateSweepControls();
 }
 function resetFilters() {
   state.task = "all";
@@ -795,6 +799,249 @@ async function compareRuns() {
     notify(t9n("Comparison failed: {error}", { error: e.message }));
   }
 }
+// Sweep: several runs against one recorded configuration field. Values are
+// read from each run's own configuration; a run without the field is plotted
+// as "Not recorded", never as zero or as equal to another run.
+const sweepMetricDefs = [
+  ["task_p50_ms", t9n("Task duration P50"), "duration"],
+  ["task_p90_ms", t9n("Task duration P90"), "duration"],
+  ["model_p50_ms", t9n("Model call P50"), "ms"],
+  ["browser_local_p50_ms", t9n("Browser tool local work P50"), "ms"],
+  ["browser_local_p90_ms", t9n("Browser tool local work P90"), "ms"],
+  ["throttled_share", t9n("Sandbox throttled-period share"), "share"],
+];
+function sweepRunLabel(run, runs) {
+  const label = (r) => r.name || r.run_id || r.id;
+  const stamp = /^\d{8}T\d{6}/.exec(run.run_id || "")?.[0];
+  return runs.filter((r) => label(r) === label(run)).length > 1 && stamp
+    ? `${label(run)} · ${stamp}`
+    : label(run);
+}
+function sweepChecked() {
+  return [...document.querySelectorAll("#sweep-runs input:checked")].map(
+    (i) => i.value,
+  );
+}
+function updateSweepControls() {
+  const runs = allRuns(),
+    box = $("#sweep-runs"),
+    previous = new Map(
+      [...box.querySelectorAll("input")].map((i) => [i.value, i.checked]),
+    );
+  for (const label of box.querySelectorAll("label")) label.remove();
+  for (const run of runs) {
+    const input = html("input");
+    input.type = "checkbox";
+    input.value = run.id;
+    input.checked = previous.get(run.id) ?? true;
+    const label = html("label", "sweep-run");
+    label.append(input, document.createTextNode(" " + sweepRunLabel(run, runs)));
+    box.append(label);
+  }
+  const chosen = runs.filter((r) => sweepChecked().includes(r.id)),
+    keys = [...new Set(chosen.flatMap((r) => Object.keys(r.configuration || {})))].sort(),
+    varying = keys.filter(
+      (k) => new Set(chosen.map((r) => JSON.stringify(r.configuration?.[k] ?? null))).size > 1,
+    ),
+    field = $("#sweep-field"),
+    oldField = field.value;
+  field.replaceChildren();
+  // Varying fields first; constant ones remain selectable.
+  for (const k of [...varying, ...keys.filter((k) => !varying.includes(k))])
+    field.add(new Option(varying.includes(k) ? k : t9n("{field} (constant)", { field: k }), k));
+  field.value = keys.includes(oldField)
+    ? oldField
+    : varying.find((k) => chosen.some((r) => typeof r.configuration?.[k] === "number")) ||
+      varying[0] ||
+      keys[0] ||
+      "";
+  const baseline = $("#sweep-baseline"),
+    oldBaseline = baseline.value;
+  baseline.replaceChildren(new Option(t9n("No index (absolute values)"), ""));
+  for (const run of chosen) baseline.add(new Option(sweepRunLabel(run, runs), run.id));
+  baseline.value = chosen.some((r) => r.id === oldBaseline) ? oldBaseline : "";
+}
+function sweepFormat(kind, v, indexed) {
+  if (v == null || !Number.isFinite(v)) return t9n("Unavailable");
+  if (indexed) return `${v.toFixed(2)}×`;
+  if (kind === "share") return `${(v * 100).toFixed(1)}%`;
+  if (kind === "duration") return `${(v / 1000).toFixed(1)} s`;
+  return `${v.toFixed(0)} ms`;
+}
+function sweepInput(id) {
+  const raw = $(id).value.trim();
+  if (!raw) return null;
+  const v = Number(raw);
+  if (!Number.isFinite(v) || v < 0) throw Error(t9n("Window bounds must be nonnegative seconds."));
+  return v;
+}
+async function plotSweep() {
+  const target = $("#sweep-result");
+  try {
+    const runs = allRuns(),
+      ids = sweepChecked(),
+      field = $("#sweep-field").value,
+      baselineID = $("#sweep-baseline").value,
+      window = { from_s: sweepInput("#sweep-from"), to_s: sweepInput("#sweep-to") };
+    if (window.from_s != null && window.to_s != null && window.to_s <= window.from_s)
+      throw Error(t9n("The window end must be after its start."));
+    if (ids.length < 2) throw Error(t9n("Select at least two runs."));
+    if (!field) throw Error(t9n("The selected runs record no configuration fields."));
+    const rows = await Promise.all(
+      ids.map(async (id) => {
+        const run = runs.find((r) => r.id === id);
+        const tasks = state.imports.has(id)
+          ? sweepSamples(state.imports.get(id))
+          : (await json("/api/sweep?run=" + encodeURIComponent(id))).tasks;
+        return {
+          id,
+          label: sweepRunLabel(run, runs),
+          value: run.configuration?.[field],
+          metrics: sweepMetrics(tasks, window),
+        };
+      }),
+    );
+    const numeric = rows.every((r) => r.value == null || typeof r.value === "number");
+    const values = [...new Set(rows.filter((r) => r.value != null).map((r) => r.value))].sort(
+      numeric ? (a, b) => a - b : (a, b) => String(a).localeCompare(String(b)),
+    );
+    const categories = [...values.map(String), ...(rows.some((r) => r.value == null) ? [null] : [])];
+    const base = rows.find((r) => r.id === baselineID);
+    target.replaceChildren();
+    const chosen = runs.filter((r) => ids.includes(r.id));
+    const others = [...new Set(chosen.flatMap((r) => Object.keys(r.configuration || {})))].filter(
+      (k) =>
+        k !== field &&
+        new Set(chosen.map((r) => JSON.stringify(r.configuration?.[k] ?? null))).size > 1,
+    );
+    const notes = [
+      t9n("Points are ordered by {field} and evenly spaced; the line joins the mean of runs that share a value.", { field }),
+      others.length
+        ? t9n("Other recorded conditions also differ: {fields}. Trends are descriptive, not a controlled causal comparison.", { fields: others.join(", ") })
+        : t9n("Other recorded conditions match. Unrecorded conditions (such as host CPU count) can still differ."),
+    ];
+    if (window.from_s != null || window.to_s != null)
+      notes.push(
+        t9n("Only tasks that started at or after {from} s and finished by {to} s after each run's first task start are included.", {
+          from: window.from_s ?? 0,
+          to: window.to_s ?? "∞",
+        }),
+      );
+    if (base) notes.push(t9n("Values are indexed to {run} (1.00× = baseline).", { run: base.label }));
+    target.append(html("p", "comparison-note", notes.join(" ")));
+    const grid = html("div", "resource-grid sweep-grid");
+    sweepMetricDefs.forEach(([key, title, kind], i) => {
+      const indexed = !!base,
+        baseValue = base?.metrics[key];
+      const points = rows.map((r) => ({
+        x: categories.indexOf(r.value == null ? null : String(r.value)),
+        y:
+          r.metrics[key] == null
+            ? null
+            : indexed
+              ? baseValue
+                ? r.metrics[key] / baseValue
+                : null
+              : r.metrics[key],
+        label: r.label,
+      }));
+      const chart = html("div", "resource-chart");
+      const heading = html("div", "chart-title");
+      heading.append(
+        html("span", "", `(${String.fromCharCode(97 + i)}) ${title}`),
+        html("strong", "", indexed ? t9n("× baseline") : ""),
+      );
+      const svg = node("svg", { role: "img", "aria-label": t9n("{metric} by {field}", { metric: title, field }) });
+      chart.append(heading, svg);
+      grid.append(chart);
+      drawSweepChart(svg, points, categories, (v) => sweepFormat(kind, v, indexed), {
+        indexed,
+        empty: indexed && !baseValue ? t9n("Baseline value is unavailable or zero; indexing is not possible.") : null,
+      });
+    });
+    target.append(grid);
+    const ledger = html("div", "table-scroll sweep-ledger");
+    table(
+      ledger,
+      [t9n("Run"), field, t9n("Tasks"), ...sweepMetricDefs.map(([, title]) => title), t9n("Samples")],
+      rows.map((r) => [
+        r.label,
+        r.value == null ? t9n("Not recorded") : String(r.value),
+        t9n("{finished}/{tasks} finished", { finished: r.metrics.finished, tasks: r.metrics.tasks }),
+        ...sweepMetricDefs.map(([key, , kind]) => sweepFormat(kind, r.metrics[key], false)),
+        t9n("{model} model · {browser} browser · {throttle} throttling", {
+          model: r.metrics.model_calls,
+          browser: r.metrics.browser_calls,
+          throttle: r.metrics.throttle_known,
+        }),
+      ]),
+    );
+    target.append(ledger);
+  } catch (e) {
+    target.replaceChildren();
+    notify(t9n("Sweep failed: {error}", { error: e.message }));
+  }
+}
+function drawSweepChart(svg, points, categories, fmt, opts) {
+  const w = 500,
+    h = 150,
+    left = 52,
+    right = 14,
+    bottom = 26,
+    top = 12;
+  svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  const valid = points.filter((p) => Number.isFinite(p.y));
+  if (opts.empty || !valid.length) {
+    svg.append(
+      node(
+        "text",
+        { x: w / 2, y: h / 2, "text-anchor": "middle", class: "chart-axis" },
+        opts.empty || t9n("No measurements available"),
+      ),
+    );
+    return;
+  }
+  const max = Math.max(maximum(valid.map((p) => p.y)), opts.indexed ? 1 : 0) * 1.15 || 1;
+  const X = (i) =>
+      categories.length === 1
+        ? (left + w - right) / 2
+        : left + ((w - left - right) * i) / (categories.length - 1),
+    Y = (v) => h - bottom - (v / max) * (h - bottom - top);
+  for (let i = 0; i <= 2; i++) {
+    const value = (max * i) / 2;
+    svg.append(
+      node("line", { x1: left, x2: w - right, y1: Y(value), y2: Y(value), stroke: "#d9d5c8", "stroke-dasharray": "2 3" }),
+      node("text", { x: left - 6, y: Y(value) + 3, "text-anchor": "end", class: "chart-axis" }, fmt(value)),
+    );
+  }
+  if (opts.indexed)
+    svg.append(node("line", { x1: left, x2: w - right, y1: Y(1), y2: Y(1), stroke: "#77756c", "stroke-width": 1 }));
+  categories.forEach((c, i) =>
+    svg.append(
+      node("text", { x: X(i), y: h - 6, "text-anchor": "middle", class: "chart-axis" }, c == null ? t9n("Not recorded") : c),
+    ),
+  );
+  const means = categories
+    .map((_, i) => {
+      const ys = valid.filter((p) => p.x === i).map((p) => p.y);
+      return ys.length ? [X(i), Y(ys.reduce((a, b) => a + b, 0) / ys.length)] : null;
+    })
+    .filter(Boolean);
+  if (means.length > 1)
+    svg.append(
+      node("path", {
+        d: means.map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(2)},${y.toFixed(2)}`).join(" "),
+        fill: "none",
+        stroke: colors.agent,
+        "stroke-width": 1.4,
+      }),
+    );
+  for (const p of valid) {
+    const dot = node("circle", { cx: X(p.x), cy: Y(p.y), r: 3.5, fill: colors.agent, stroke: "white", "stroke-width": 1 });
+    dot.append(node("title", {}, `${p.label}: ${fmt(p.y)}`));
+    svg.append(dot);
+  }
+}
 function setTask(id) {
   state.task = id;
   state.pageOffset = 0;
@@ -1187,6 +1434,18 @@ function drawResources() {
   $("#network-peak").textContent = rates.length
     ? t9n("{value} peak", { value: `${bytes(maximum(rates))}/s` })
     : t9n("Not measured");
+  const throttle = throttleShares(selected);
+  drawChart(
+    $("#throttle-chart"),
+    throttle,
+    "throttled_percent",
+    total,
+    colors.tool,
+  );
+  const shares = throttle.map((r) => r.throttled_percent).filter(Number.isFinite);
+  $("#throttle-peak").textContent = shares.length
+    ? t9n("{value} peak", { value: `${maximum(shares).toFixed(1)}%` })
+    : t9n("Not measured");
   const gpu = selected.map((r) => r.gpu_percent).filter(Number.isFinite);
   $("#gpu-peak").textContent = gpu.length
     ? t9n("{value} peak", { value: `${maximum(gpu).toFixed(1)}%` })
@@ -1262,11 +1521,14 @@ function drawChart(svg, samples, key, total, tint, axis) {
     );
     return;
   }
+  // A share of periods is bounded; utilization can exceed 100% across cores.
   const max =
-    Math.max(
-      maximum(valid.map((r) => r[key])),
-      key.endsWith("percent") ? 1 : axis ? 1024 : 1048576,
-    ) * 1.15;
+    key === "throttled_percent"
+      ? 100
+      : Math.max(
+          maximum(valid.map((r) => r[key])),
+          key.endsWith("percent") ? 1 : axis ? 1024 : 1048576,
+        ) * 1.15;
   for (let i = 0; i <= 2; i++) {
     const value = (max * i) / 2,
       y = h - bottom - ((h - bottom - top) * i) / 2;
@@ -1657,6 +1919,8 @@ $("#highlight-critical").onclick = () => {
   renderViews();
 };
 $("#compare-button").onclick = compareRuns;
+$("#sweep-button").onclick = plotSweep;
+$("#sweep-runs").onchange = updateSweepControls;
 $("#fit-graph").onclick = () => {
   const svg = $("#dag"),
     w = svg.viewBox.baseVal.width,

@@ -504,6 +504,55 @@ h2 {
   letter-spacing: 0.8px;
 }
 
+/* Sweep: run picker and condition charts. */
+#sweep-details {
+  border-top: 1px solid var(--line);
+}
+.sweep-runs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 0 21px 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  font: 11px var(--mono);
+  color: var(--ink-2);
+}
+.sweep-runs legend {
+  font: 10px var(--mono);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  padding: 0 4px;
+}
+.sweep-run {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.sweep-run input {
+  accent-color: var(--ink);
+}
+.comparison-controls input {
+  border: 1px solid var(--rule);
+  border-radius: 0;
+  background: var(--panel);
+  color: var(--ink);
+  font: 11px var(--mono);
+  padding: 9px;
+  width: 100%;
+}
+.sweep-grid .resource-chart {
+  padding: 17px 20px 6px;
+}
+.sweep-grid .resource-chart svg {
+  display: block;
+  width: 100%;
+  height: 160px;
+}
+
 /* Tables read like a lab ledger. */
 .table-scroll table {
   font: 11px var(--mono);
@@ -949,4 +998,10 @@ h2 {
 :lang(zh-CN) .sidebar-section,
 :lang(zh-CN) .workspace-label {
   letter-spacing: 0.04em;
+}
+.sweep-ledger table {
+  min-width: 1080px;
+}
+.sweep-ledger td:first-child {
+  white-space: nowrap;
 }

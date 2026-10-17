@@ -36,3 +36,18 @@ As ARIES creates its output directory, TraceX mounts it automatically and opens 
 Job state is held in memory. Generated configurations, private stdout/stderr and artifacts remain under `ARIES_DIR/.cache/tracex/jobs` (override with `--jobs-dir`). After restarting TraceX, inspect retained outputs with `--run JOB_DIR/artifacts/RUN_ID`; do not assume an interrupted service has cleaned an execution host. Keep experiment controls on loopback unless you intentionally grant other clients access to the execution host.
 
 Experiment-enabled serving requires watching; `--watch 0` becomes one second. Existing `--run` inputs and the two default synthetic demonstrations remain available alongside real runs. Export mode cannot be combined with `--aries-dir`.
+
+## Configuration sweep
+
+**Compare experiments → Configuration sweep** plots several runs against one field recorded in each run's `run-profile.json` (for example `concurrency`, `sandbox_cpu_limit` or `agent_timeout_seconds`). Fields that differ across the selected runs are listed first. A run that does not record the field is plotted as *Not recorded*, never as zero or as equal to another run. Points are ordered by value and evenly spaced; the line joins the mean of runs that share a value. Other recorded conditions that also differ are named, and unrecorded conditions (such as host CPU count) are not detected.
+
+Each chart has one y-axis:
+
+| Metric | Derivation |
+| --- | --- |
+| Task duration P50/P90 | Finished tasks (succeeded, failed or canceled) with a measured start |
+| Model call P50 | Completed model spans with no nested model span, so a turn envelope around an API call counts once |
+| Browser tool local work P50/P90 | Each browser MCP `tools/call` span minus its overlap with the union of that task's browser network request intervals (sandbox-reported clocks, not independently synchronized) |
+| Sandbox throttled-period share | Per task, sandbox `cpu_throttling` period increases summed over consecutive samples (resets excluded); mean over tasks with throttling measured. No elapsed enforcement period counts as 0% |
+
+The optional window keeps tasks that started at least *N* seconds after the run's first task start and finished by *M* seconds, e.g. 180 and 900 to exclude warm-up and tasks that ran past admission close. **Index to** divides each metric by the chosen run's value; a missing or zero baseline value leaves that chart unindexed. Imported profiles can join a sweep; their samples are derived in the browser with the same rules.

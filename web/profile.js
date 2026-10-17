@@ -39,6 +39,7 @@
     "memory_limit_bytes",
     "memory_peak_bytes",
   ];
+  const throttleKeys = ["periods", "throttled_periods", "throttled_us"];
   const configKeys = new Set([
     "benchmark",
     "harness",
@@ -249,6 +250,16 @@
       for (const k of resourceKeys)
         if (r[k] != null && (!Number.isFinite(r[k]) || r[k] < 0))
           throw Error(`Invalid ${k} reading.`);
+      if (r.cpu_throttling != null) {
+        const c = r.cpu_throttling;
+        if (
+          typeof c !== "object" ||
+          !throttleKeys.every((k) => Number.isFinite(c[k]) && c[k] >= 0) ||
+          c.throttled_periods > c.periods
+        )
+          throw Error("Invalid cpu_throttling reading.");
+        retain(c, throttleKeys);
+      }
     }
     for (const c of p.capabilities || [])
       if (
@@ -302,6 +313,7 @@
         "runtime_id",
         "time_ms",
         ...resourceKeys,
+        "cpu_throttling",
       ]);
     for (const c of p.capabilities || [])
       retain(c, ["name", "status", "reason"]);
@@ -651,7 +663,161 @@
       analysis: analyze(p),
     };
   }
+  const seriesKey = (r) => `${r.task_id || ""}\u0000${r.component || ""}\u0000${r.runtime_id || ""}`;
+  // cgroup throttling counters are cumulative per runtime. Shares come from
+  // consecutive samples of one series; a counter reset yields no share and an
+  // absent reading is unmeasured, never zero.
+  function throttleShares(samples) {
+    const series = new Map(),
+      out = [];
+    for (const r of samples) {
+      if (!r.cpu_throttling) continue;
+      const id = seriesKey(r);
+      if (!series.has(id)) series.set(id, []);
+      series.get(id).push(r);
+    }
+    for (const rs of series.values()) {
+      rs.sort((a, b) => a.time_ms - b.time_ms);
+      for (let i = 1; i < rs.length; i++) {
+        const a = rs[i - 1].cpu_throttling,
+          b = rs[i].cpu_throttling,
+          periods = b.periods - a.periods,
+          throttled = b.throttled_periods - a.throttled_periods,
+          valid = periods >= 0 && throttled >= 0 && throttled <= periods;
+        out.push({
+          task_id: rs[i].task_id,
+          component: rs[i].component,
+          runtime_id: rs[i].runtime_id,
+          time_ms: rs[i].time_ms,
+          periods: valid ? periods : null,
+          throttled_periods: valid ? throttled : null,
+          // No enforcement period elapsed: nothing was throttled.
+          throttled_percent: valid ? (periods ? (throttled / periods) * 100 : 0) : null,
+        });
+      }
+    }
+    return out;
+  }
+  const finishedStatus = new Set(["succeeded", "success", "completed", "failed", "canceled"]);
+  // Mirrors the server's per-task sweep samples (internal/profile/sweep.go)
+  // so imported profiles can join a sweep.
+  function sweepSamples(p) {
+    const nested = new Set(
+      p.spans.filter((s) => s.kind === "model" && s.parent_id).map((s) => s.parent_id),
+    );
+    const network = new Map();
+    for (const s of p.spans)
+      if (s.kind === "network" && !incomplete(s)) {
+        if (!network.has(s.task_id)) network.set(s.task_id, []);
+        network.get(s.task_id).push([s.start_ms, s.start_ms + s.duration_ms]);
+      }
+    const merged = new Map();
+    for (const [task, xs] of network) {
+      const m = [];
+      for (const [a, b] of xs.sort((x, y) => x[0] - y[0])) {
+        if (b <= a) continue;
+        if (m.length && a <= m[m.length - 1][1]) m[m.length - 1][1] = Math.max(m[m.length - 1][1], b);
+        else m.push([a, b]);
+      }
+      merged.set(task, m);
+    }
+    const tasks = new Map(
+      p.tasks.map((t) => [
+        t.id,
+        {
+          task_id: t.id,
+          start_ms: t.start_ms,
+          duration_ms:
+            finishedStatus.has(t.status) && !["unknown", "completion_only"].includes(t.time_quality)
+              ? t.duration_ms
+              : null,
+          model_ms: [],
+          browser_local_ms: [],
+        },
+      ]),
+    );
+    for (const s of p.spans) {
+      const t = tasks.get(s.task_id);
+      if (!t || incomplete(s)) continue;
+      if (s.kind === "model" && !nested.has(s.id) && s.attributes?.time_quality !== "unknown")
+        t.model_ms.push(s.duration_ms);
+      else if (s.kind === "browser" && (s.name || "").includes("tools/call")) {
+        const start = s.start_ms,
+          end = s.start_ms + s.duration_ms;
+        let remote = 0;
+        for (const [a, b] of merged.get(s.task_id) || [])
+          remote += Math.max(0, Math.min(end, b) - Math.max(start, a));
+        t.browser_local_ms.push(Math.max(0, s.duration_ms - remote));
+      }
+    }
+    const shares = throttleShares(
+      (p.resources || []).filter((r) => r.component === "sandbox" && r.task_id),
+    );
+    const measured = new Set(
+      (p.resources || [])
+        .filter((r) => r.component === "sandbox" && r.cpu_throttling)
+        .map((r) => r.task_id),
+    );
+    for (const id of measured) {
+      const t = tasks.get(id);
+      if (!t) continue;
+      t.periods = 0;
+      t.throttled_periods = 0;
+    }
+    for (const x of shares) {
+      const t = tasks.get(x.task_id);
+      if (t && x.periods != null) {
+        t.periods += x.periods;
+        t.throttled_periods += x.throttled_periods;
+      }
+    }
+    return [...tasks.values()];
+  }
+  // Linear-interpolated quantile, matching the server's task latency quantiles.
+  function quantile(values, q) {
+    if (!values.length) return null;
+    const xs = [...values].sort((a, b) => a - b),
+      i = q * (xs.length - 1),
+      lo = Math.floor(i),
+      hi = Math.ceil(i);
+    return xs[lo] + (xs[hi] - xs[lo]) * (i - lo);
+  }
+  // Aggregates one run's sweep samples. The optional steady window keeps
+  // tasks that started at least from_s after the run's first task start and
+  // finished by to_s; it is relative to that run, not wall-clock time.
+  function sweepMetrics(tasks, opts = {}) {
+    const origin = tasks.length ? Math.min(...tasks.map((t) => t.start_ms)) : 0;
+    const kept = tasks.filter(
+      (t) =>
+        (opts.from_s == null || t.start_ms >= origin + opts.from_s * 1000) &&
+        (opts.to_s == null ||
+          (t.duration_ms != null && t.start_ms + t.duration_ms <= origin + opts.to_s * 1000)),
+    );
+    const durations = kept.map((t) => t.duration_ms).filter((v) => v != null),
+      model = kept.flatMap((t) => t.model_ms),
+      local = kept.flatMap((t) => t.browser_local_ms),
+      shares = kept
+        .filter((t) => t.periods != null)
+        .map((t) => (t.periods ? t.throttled_periods / t.periods : 0));
+    return {
+      tasks: kept.length,
+      finished: durations.length,
+      task_p50_ms: quantile(durations, 0.5),
+      task_p90_ms: quantile(durations, 0.9),
+      model_calls: model.length,
+      model_p50_ms: quantile(model, 0.5),
+      browser_calls: local.length,
+      browser_local_p50_ms: quantile(local, 0.5),
+      browser_local_p90_ms: quantile(local, 0.9),
+      throttle_known: shares.length,
+      throttled_share: shares.length ? shares.reduce((a, b) => a + b, 0) / shares.length : null,
+    };
+  }
   const api = Object.freeze({
+    throttleShares,
+    sweepSamples,
+    sweepMetrics,
+    quantile,
     validate,
     union,
     maximum,

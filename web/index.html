@@ -202,6 +202,33 @@
             </div>
             <div id="comparison-result" class="table-scroll"></div>
           </details>
+          <details id="sweep-details">
+            <summary>
+              Configuration sweep
+              <span>Metrics across several runs against one recorded condition</span>
+            </summary>
+            <div class="sweep-controls">
+              <fieldset id="sweep-runs" class="sweep-runs">
+                <legend>Runs</legend>
+              </fieldset>
+              <div class="comparison-controls">
+                <label
+                  >Condition
+                  <select id="sweep-field" aria-label="Sweep condition"></select></label
+                ><label
+                  >Index to
+                  <select id="sweep-baseline" aria-label="Index baseline run"></select></label
+                ><label
+                  >Skip tasks starting before (s)
+                  <input id="sweep-from" type="number" min="0" step="1" placeholder="0" /></label
+                ><label
+                  >Skip tasks ending after (s)
+                  <input id="sweep-to" type="number" min="0" step="1" placeholder="none" /></label
+                ><button id="sweep-button" class="button">Plot sweep</button>
+              </div>
+            </div>
+            <div id="sweep-result"></div>
+          </details>
         </section>
         <section class="explorer" data-fig="§4 Execution" aria-label="Execution explorer">
           <div class="explorer-toolbar">
@@ -411,6 +438,16 @@
                 id="network-chart"
                 role="img"
                 aria-label="Container network throughput over time"
+              ></svg>
+            </div>
+            <div class="resource-chart">
+              <div class="chart-title">
+                <span>(e) CPU throttled periods</span><strong id="throttle-peak">—</strong>
+              </div>
+              <svg
+                id="throttle-chart"
+                role="img"
+                aria-label="Share of CPU enforcement periods throttled over time"
               ></svg>
             </div>
           </div>
