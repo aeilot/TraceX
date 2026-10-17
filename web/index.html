@@ -10,6 +10,7 @@
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%272%27 fill=%27%2316181a%27/%3E%3Ctext x=%276%27 y=%2725%27 font-size=%2728%27 fill=%27%23f3f1ea%27%3E↗%3C/text%3E%3C/svg%3E"
     />
+    <script src="/i18n.js" defer></script>
     <script src="/profile.js" defer></script>
     <link rel="stylesheet" href="/styles.css" />
     <script src="/app.js" defer></script>
@@ -59,6 +60,12 @@
           Workspace <span>/</span> <strong>Workload explorer</strong>
         </div>
         <div class="header-actions">
+          <div
+            id="language-switch"
+            class="view-tabs language-switch"
+            role="group"
+            aria-label="Language"
+          ></div>
           <select
             id="run-picker-mobile"
             aria-label="Select active run"

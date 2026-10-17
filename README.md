@@ -59,6 +59,7 @@ Select a workload and profile, choose declared tasks and concurrency, prepare pr
 - **Linked time window:** enter a range or drag empty timeline space. Spans and CPU/memory/GPU signals share the window. Span details show concurrent resource sample statistics, with runtime/task/shared context labels rather than causal cost claims.
 - **Comparison:** choose baseline and candidate runs, inspect configuration differences, latency, throughput, tokens, and evidence coverage. Imported JSON profiles can be compared with mounted sources.
 - **Large runs:** server-side filtering and pagination, stable time ordering, overlap indexes, span lookup across pages, and per-runtime resource envelopes that retain observed extrema and missing-value boundaries. Every matching span remains reachable through pagination.
+- **Language:** English and Simplified Chinese. The interface follows the browser language; the header switch overrides it and is remembered per browser.
 - **Live sources:** incrementally decoded JSONL, partial-line handling, truncation/rotation recovery, last-valid snapshots on malformed updates, and reconnectable server-sent revision notifications.
 
 ## Data sources
