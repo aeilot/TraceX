@@ -24,6 +24,7 @@ func TestRoutes(t *testing.T) {
 		{"/app.js", 200, "javascript"},
 		{"/profile.js", 200, "javascript"},
 		{"/styles.css", 200, "text/css"},
+		{"/lab.css", 200, "text/css"},
 		{"/api/profile", 200, "application/json"},
 		{"/api/health", 200, "application/json"},
 		{"/api/missing", 404, "application/json"},

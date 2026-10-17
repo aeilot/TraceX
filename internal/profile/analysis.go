@@ -51,6 +51,10 @@ type Analysis struct {
 	TaskP95MS           float64      `json:"task_p95_ms"`
 	ThroughputPerSecond float64      `json:"throughput_per_second"`
 	CriticalPath        CriticalPath `json:"critical_path"`
+	// ScoreMean is the mean recorded accuracy over ScoreKnown tasks; tasks
+	// without a score are excluded, never counted as zero.
+	ScoreMean  *float64 `json:"score_mean"`
+	ScoreKnown int      `json:"score_known"`
 }
 type interval struct{ start, end float64 }
 
@@ -213,6 +217,13 @@ func Analyze(p Profile) Analysis {
 			c.Ratio = 0
 		}
 		a.Coverage = append(a.Coverage, c)
+		if t.Score != nil {
+			if a.ScoreMean == nil {
+				a.ScoreMean = new(float64)
+			}
+			*a.ScoreMean += *t.Score
+			a.ScoreKnown++
+		}
 		success := t.Status == "succeeded" || t.Status == "success" || t.Status == "completed"
 		failed := t.Status == "failed" || t.Status == "canceled"
 		if success || failed {
@@ -225,6 +236,9 @@ func Analyze(p Profile) Analysis {
 				a.TaskFailed++
 			}
 		}
+	}
+	if a.ScoreKnown > 0 {
+		*a.ScoreMean /= float64(a.ScoreKnown)
 	}
 	sort.Float64s(durations)
 	a.TaskP50MS = quantile(durations, .5)

@@ -33,6 +33,23 @@ type Task struct {
 	DurationMS       float64 `json:"duration_ms"`
 	EvaluationStatus string  `json:"evaluation_status"`
 	CleanupStatus    string  `json:"cleanup_status"`
+	// Score is the benchmark's continuous accuracy in [0,1] when recorded.
+	Score     *float64        `json:"score,omitempty"`
+	EndReason string          `json:"end_reason,omitempty"`
+	Network   *NetworkSummary `json:"network,omitempty"`
+	// Flags are loader-derived evidence-quality markers, never outcomes.
+	Flags []string `json:"flags,omitempty"`
+}
+
+// NetworkSummary keeps aggregate browser counters only; URLs are never retained.
+type NetworkSummary struct {
+	Requests       *float64           `json:"requests,omitempty"`
+	Failed         *float64           `json:"failed,omitempty"`
+	Unsent         *float64           `json:"unsent,omitempty"`
+	ResponseBytes  *float64           `json:"response_bytes,omitempty"`
+	ActiveMS       *float64           `json:"active_ms,omitempty"`
+	Navigations    int                `json:"navigations,omitempty"`
+	ByResourceType map[string]float64 `json:"by_resource_type,omitempty"`
 }
 type Span struct {
 	ID         string         `json:"id"`
@@ -67,6 +84,12 @@ type Resource struct {
 	CPUPercent  *float64 `json:"cpu_percent,omitempty"`
 	MemoryBytes *float64 `json:"memory_bytes,omitempty"`
 	GPUPercent  *float64 `json:"gpu_percent,omitempty"`
+	// Network counters are cumulative bytes per runtime as reported by ARIES.
+	NetworkRxBytes   *float64 `json:"network_rx_bytes,omitempty"`
+	NetworkTxBytes   *float64 `json:"network_tx_bytes,omitempty"`
+	PIDs             *float64 `json:"pids,omitempty"`
+	MemoryLimitBytes *float64 `json:"memory_limit_bytes,omitempty"`
+	MemoryPeakBytes  *float64 `json:"memory_peak_bytes,omitempty"`
 }
 type Capability struct {
 	Name   string `json:"name"`
@@ -79,7 +102,7 @@ func empty() Profile {
 }
 func validTime(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) && v >= 0 }
 
-var allowedAttributes = map[string]bool{"model": true, "gen_ai.request.model": true, "gen_ai.usage.input_tokens": true, "gen_ai.usage.output_tokens": true, "tool.name": true, "exit_code": true, "synthetic": true, "phase": true, "time_quality": true, "backend": true, "harness": true, "provider": true, "resource_type": true, "http_status": true, "page": true, "agent.id": true}
+var allowedAttributes = map[string]bool{"model": true, "gen_ai.request.model": true, "gen_ai.usage.input_tokens": true, "gen_ai.usage.output_tokens": true, "tool.name": true, "exit_code": true, "synthetic": true, "phase": true, "time_quality": true, "backend": true, "harness": true, "provider": true, "resource_type": true, "http_status": true, "page": true, "agent.id": true, "bridge_role": true}
 
 func filterAttributes(attrs map[string]any) map[string]any {
 	out := map[string]any{}
@@ -129,6 +152,29 @@ func Validate(p *Profile) error {
 		if !validTime(t.StartMS) || !validTime(t.DurationMS) || !validTime(t.StartMS+t.DurationMS) {
 			return fmt.Errorf("invalid task timing")
 		}
+	}
+	for i := range p.Tasks {
+		t := &p.Tasks[i]
+		if t.Score != nil && (!validTime(*t.Score) || *t.Score > 1) {
+			return fmt.Errorf("invalid task score")
+		}
+		t.EndReason = enumText(t.EndReason)
+		if t.Network != nil {
+			n := t.Network
+			for _, v := range []*float64{n.Requests, n.Failed, n.Unsent, n.ResponseBytes, n.ActiveMS} {
+				if v != nil && !validTime(*v) {
+					return fmt.Errorf("invalid network summary")
+				}
+			}
+			n.ByResourceType = resourceTypeCounts(n.ByResourceType)
+		}
+		flags := t.Flags[:0]
+		for _, f := range t.Flags {
+			if taskFlags[f] {
+				flags = append(flags, f)
+			}
+		}
+		t.Flags = flags
 	}
 	spans := map[string]*Span{}
 	for i := range p.Spans {
@@ -230,7 +276,7 @@ func Validate(p *Profile) error {
 		if !validTime(r.TimeMS) {
 			return fmt.Errorf("invalid resource time")
 		}
-		for _, v := range []*float64{r.CPUPercent, r.MemoryBytes, r.GPUPercent} {
+		for _, v := range []*float64{r.CPUPercent, r.MemoryBytes, r.GPUPercent, r.NetworkRxBytes, r.NetworkTxBytes, r.PIDs, r.MemoryLimitBytes, r.MemoryPeakBytes} {
 			if v != nil && !validTime(*v) {
 				return fmt.Errorf("invalid resource reading")
 			}
@@ -286,4 +332,40 @@ func filterConfiguration(in map[string]any) map[string]any {
 		}
 	}
 	return out
+}
+
+var taskFlags = map[string]bool{"duration_outlier": true, "sparse_monitor": true}
+
+// Browser resource types are a closed enum; anything else is folded into "other".
+var resourceTypes = map[string]bool{"document": true, "stylesheet": true, "image": true, "media": true, "font": true, "script": true, "texttrack": true, "xhr": true, "fetch": true, "eventsource": true, "websocket": true, "manifest": true, "ping": true, "prefetch": true, "preflight": true, "other": true}
+
+func resourceTypeCounts(in map[string]float64) map[string]float64 {
+	if len(in) == 0 {
+		return nil
+	}
+	out := map[string]float64{}
+	for k, v := range in {
+		if !validTime(v) {
+			continue
+		}
+		if !resourceTypes[k] {
+			k = "other"
+		}
+		out[k] += v
+	}
+	return out
+}
+
+// enumText keeps short identifier-like producer enums (e.g. end reasons) and
+// drops free text, which may carry raw errors.
+func enumText(s string) string {
+	if len(s) == 0 || len(s) > 64 {
+		return ""
+	}
+	for _, c := range s {
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_' || c == '-') {
+			return ""
+		}
+	}
+	return s
 }

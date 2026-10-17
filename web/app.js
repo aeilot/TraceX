@@ -10,15 +10,15 @@ const {
 const $ = (s) => document.querySelector(s),
   NS = "http://www.w3.org/2000/svg";
 const colors = {
-  agent: "#218b80",
-  model: "#7075d8",
-  tool: "#d79a45",
-  browser: "#4998bf",
-  network: "#59a9bc",
-  evaluation: "#87978a",
-  lifecycle: "#94a79a",
-  task: "#628d89",
-  other: "#8b9697",
+  agent: "#0f6b5f",
+  model: "#4a46c4",
+  tool: "#c46a00",
+  browser: "#1f78b4",
+  network: "#5f97b0",
+  evaluation: "#6b7d2a",
+  lifecycle: "#8b887c",
+  task: "#5d7f7a",
+  other: "#9a968a",
 };
 const state = {
   profile: null,
@@ -74,13 +74,40 @@ function format(ms) {
   if (ms == null || !Number.isFinite(ms)) return "—";
   if (ms < 1000) return `${Math.round(ms)} ms`;
   if (ms < 60000) return `${(ms / 1000).toFixed(ms < 10000 ? 2 : 1)} s`;
-  return `${Math.floor(ms / 60000)}m ${((ms % 60000) / 1000).toFixed(1)}s`;
+  if (ms < 3600000)
+    return `${Math.floor(ms / 60000)}m ${((ms % 60000) / 1000).toFixed(1)}s`;
+  return `${Math.floor(ms / 3600000)}h ${Math.floor((ms % 3600000) / 60000)}m`;
+}
+function rate(perSecond) {
+  if (!Number.isFinite(perSecond)) return "—";
+  if (perSecond >= 0.1) return `${perSecond.toFixed(3)} / s`;
+  if (perSecond * 60 >= 0.1) return `${(perSecond * 60).toFixed(2)} / min`;
+  return `${(perSecond * 3600).toFixed(2)} / h`;
 }
 function bytes(n) {
   if (n == null) return "Unavailable";
   return n >= 1073741824
     ? `${(n / 1073741824).toFixed(2)} GiB`
     : `${(n / 1048576).toFixed(1)} MiB`;
+}
+function score(v) {
+  return Number.isFinite(v) ? v.toFixed(2) : "—";
+}
+function failedTask(t) {
+  return ["failed", "canceled"].includes(t.status);
+}
+function flagText(t) {
+  const out = [];
+  if (t.flags?.includes("duration_outlier")) out.push("duration outlier");
+  if (t.flags?.includes("sparse_monitor")) out.push("sparse monitor");
+  return out.join(" · ");
+}
+function networkText(n) {
+  if (!n) return "—";
+  const parts = [`${(n.requests ?? 0).toLocaleString()} req`];
+  if (n.failed) parts.push(`${n.failed.toLocaleString()} failed`);
+  if (n.response_bytes != null) parts.push(bytes(n.response_bytes));
+  return parts.join(" · ");
 }
 function spanDuration(s) {
   return s.incomplete
@@ -150,8 +177,19 @@ function updateRunPickers() {
     const select = $("#" + id),
       old = select.value;
     select.replaceChildren();
-    for (const run of runs)
-      select.add(new Option(run.name || run.run_id || run.id, run.id));
+    const label = (run) => run.name || run.run_id || run.id,
+      seen = new Map();
+    for (const run of runs) seen.set(label(run), (seen.get(label(run)) || 0) + 1);
+    for (const run of runs) {
+      // Repeated experiment names are told apart by their run timestamp.
+      const stamp = /^\d{8}T\d{6}/.exec(run.run_id || "")?.[0];
+      select.add(
+        new Option(
+          seen.get(label(run)) > 1 && stamp ? `${label(run)} · ${stamp}` : label(run),
+          run.id,
+        ),
+      );
+    }
     if (id === "run-picker" || id === "run-picker-mobile")
       select.value = state.runKey;
     else
@@ -356,13 +394,26 @@ function render() {
       "button",
       `task-button ${state.task === t.id ? "selected" : ""}`,
     );
-    b.title = t.id;
+    const flags = flagText(t);
+    b.title = [
+      t.id,
+      Number.isFinite(t.score) ? `accuracy ${t.score.toFixed(3)}` : "",
+      t.end_reason ? `ended: ${t.end_reason}` : "",
+      flags,
+    ]
+      .filter(Boolean)
+      .join("\n");
     b.setAttribute("aria-pressed", String(state.task === t.id));
     b.append(
-      html("span", `status-dot ${t.status === "failed" ? "failed" : ""}`),
-      html("span", "task-name", t.name || t.id),
-      html("span", "task-duration", format(t.duration_ms)),
+      html("span", `status-dot ${failedTask(t) ? "failed" : ""}`),
+      html("span", "task-name", (flags ? "⚠ " : "") + (t.name || t.id)),
     );
+    if (Number.isFinite(t.score)) {
+      const sc = html("span", "task-score", score(t.score));
+      sc.style.setProperty("--score", t.score);
+      b.append(sc);
+    }
+    b.append(html("span", "task-duration", format(t.duration_ms)));
     b.onclick = () => setTask(t.id);
     list.append(b);
   }
@@ -461,10 +512,17 @@ function renderAnalysis() {
       done ? `${format(a.task_p50_ms)} / ${format(a.task_p95_ms)}` : "—",
       "Completed task occurrences",
     ],
+    [
+      "MEAN ACCURACY",
+      a.score_known ? score(a.score_mean) : "—",
+      a.score_known
+        ? `Recorded score.json · ${a.score_known}/${a.task_count} tasks`
+        : "No continuous scores recorded",
+    ],
     ["PEAK WORK CONCURRENCY", a.max_concurrency, "Nested envelopes excluded"],
     [
       "THROUGHPUT",
-      `${a.throughput_per_second.toFixed(3)} / s`,
+      rate(a.throughput_per_second),
       `${a.task_succeeded} succeeded · ${a.task_failed} failed`,
     ],
     [
@@ -531,12 +589,16 @@ function renderAnalysis() {
   }
   const rows = p.tasks.map((t) => {
     const c = a.coverage.find((c) => c.task_id === t.id);
+    const flags = flagText(t);
     return [
-      t.name || t.id,
+      (flags ? "⚠ " : "") + (t.name || t.id),
       t.status || "unknown",
+      t.end_reason || "—",
       t.evaluation_status || "unknown",
+      score(t.score),
       t.cleanup_status || "unknown",
-      format(t.duration_ms),
+      format(t.duration_ms) + (flags ? ` (${flags})` : ""),
+      networkText(t.network),
       c && c.status !== "unavailable"
         ? `${(c.ratio * 100).toFixed(1)}%`
         : "Unavailable",
@@ -550,9 +612,12 @@ function renderAnalysis() {
     [
       "Task",
       "Harness",
+      "End reason",
       "Evaluation",
+      "Accuracy",
       "Cleanup",
       "Duration",
+      "Browser network",
       "Observed work",
       "Unattributed",
     ],
@@ -602,6 +667,12 @@ async function compareRuns() {
     );
     const items = [
       ["Duration", l.profile.duration_ms, r.profile.duration_ms, format],
+      [
+        "Mean accuracy",
+        l.analysis.score_mean,
+        r.analysis.score_mean,
+        (v) => (v == null ? "Unavailable" : v.toFixed(3)),
+      ],
       ["Task P50", l.analysis.task_p50_ms, r.analysis.task_p50_ms, format],
       ["Task P95", l.analysis.task_p95_ms, r.analysis.task_p95_ms, format],
       [
@@ -786,7 +857,7 @@ function drawDAG(spans) {
       markerHeight: 5,
       orient: "auto-start-reverse",
     });
-  marker.append(node("path", { d: "M 0 0 L 10 5 L 0 10 z", fill: "#a8bbaa" }));
+  marker.append(node("path", { d: "M 0 0 L 10 5 L 0 10 z", fill: "#8b887c" }));
   defs.append(marker);
   svg.append(defs);
   for (const [d] of columns)
@@ -934,7 +1005,7 @@ function drawTimeline(spans) {
         y: lane.y - 8,
         width: labelWidth - 12,
         height: lane.height,
-        fill: "#fff",
+        fill: "#fcfbf7",
       }),
       node(
         "text",
@@ -951,7 +1022,7 @@ function drawTimeline(spans) {
         x2: width,
         y1: lane.y + lane.height - 11,
         y2: lane.y + lane.height - 11,
-        stroke: "#f1f4ed",
+        stroke: "#e6e2d6",
       }),
     );
   }
@@ -1019,8 +1090,8 @@ function drawTimeline(spans) {
       y: 27,
       width: 1,
       height: height - 27,
-      fill: "#258b7d20",
-      stroke: "#258b7d",
+      fill: "#e03a1e14",
+      stroke: "#e03a1e",
       "pointer-events": "none",
     });
     svg.append(overlay);
@@ -1066,9 +1137,27 @@ function drawResources() {
       (state.runtime === "all" ||
         (r.runtime_id || r.component) === state.runtime),
   );
-  drawChart($("#cpu-chart"), selected, "cpu_percent", total, "#438f7c");
-  drawChart($("#memory-chart"), selected, "memory_bytes", total, "#8b91c6");
-  drawChart($("#gpu-chart"), selected, "gpu_percent", total, "#bd9860");
+  drawChart($("#cpu-chart"), selected, "cpu_percent", total, colors.agent);
+  drawChart($("#memory-chart"), selected, "memory_bytes", total, colors.model);
+  drawChart($("#gpu-chart"), selected, "gpu_percent", total, colors.tool);
+  const net = networkRates(selected);
+  drawChart(
+    $("#network-chart"),
+    net,
+    "network_rate",
+    total,
+    colors.browser,
+    (v) =>
+      v >= 1048576
+        ? (v / 1048576).toFixed(0) + "M"
+        : v >= 1024
+          ? (v / 1024).toFixed(0) + "K"
+          : v.toFixed(0),
+  );
+  const rates = net.map((r) => r.network_rate).filter(Number.isFinite);
+  $("#network-peak").textContent = rates.length
+    ? `${bytes(maximum(rates))}/s peak`
+    : "Not measured";
   const gpu = selected.map((r) => r.gpu_percent).filter(Number.isFinite);
   $("#gpu-peak").textContent = gpu.length
     ? `${maximum(gpu).toFixed(1)}% peak`
@@ -1078,11 +1167,53 @@ function drawResources() {
   $("#cpu-peak").textContent = cpu.length
     ? `${maximum(cpu).toFixed(1)}% peak`
     : "Not measured";
+  // Percent of the runtime's own memory limit; series without a limit are
+  // excluded rather than compared against another runtime's limit.
+  const pct = selected
+    .filter(
+      (r) => Number.isFinite(r.memory_bytes) && r.memory_limit_bytes > 0,
+    )
+    .map((r) => (r.memory_bytes / r.memory_limit_bytes) * 100);
   $("#memory-peak").textContent = mem.length
-    ? `${bytes(maximum(mem))} peak`
+    ? `${bytes(maximum(mem))} peak` +
+      (pct.length ? ` · ${maximum(pct).toFixed(1)}% of limit` : "")
     : "Not measured";
 }
-function drawChart(svg, samples, key, total, tint) {
+// Monitor network counters are cumulative per runtime; rates come from
+// consecutive samples of one series. Counter resets yield no rate.
+function networkRates(samples) {
+  const series = new Map(),
+    out = [];
+  for (const r of samples) {
+    if (!Number.isFinite(r.network_rx_bytes) && !Number.isFinite(r.network_tx_bytes))
+      continue;
+    const id = r.runtime_id || `${r.task_id}/${r.component}`;
+    if (!series.has(id)) series.set(id, []);
+    series.get(id).push(r);
+  }
+  for (const rs of series.values()) {
+    rs.sort((a, b) => a.time_ms - b.time_ms);
+    for (let i = 1; i < rs.length; i++) {
+      const a = rs[i - 1],
+        b = rs[i],
+        dt = (b.time_ms - a.time_ms) / 1000,
+        d =
+          (b.network_rx_bytes ?? 0) -
+          (a.network_rx_bytes ?? 0) +
+          (b.network_tx_bytes ?? 0) -
+          (a.network_tx_bytes ?? 0);
+      out.push({
+        task_id: b.task_id,
+        component: b.component,
+        runtime_id: b.runtime_id,
+        time_ms: b.time_ms,
+        network_rate: dt > 0 && d >= 0 ? d / dt : null,
+      });
+    }
+  }
+  return out;
+}
+function drawChart(svg, samples, key, total, tint, axis) {
   svg.replaceChildren();
   const w = 500,
     h = 112,
@@ -1105,7 +1236,7 @@ function drawChart(svg, samples, key, total, tint) {
   const max =
     Math.max(
       maximum(valid.map((r) => r[key])),
-      key.endsWith("percent") ? 1 : 1048576,
+      key.endsWith("percent") ? 1 : axis ? 1024 : 1048576,
     ) * 1.15;
   for (let i = 0; i <= 2; i++) {
     const value = (max * i) / 2,
@@ -1116,15 +1247,17 @@ function drawChart(svg, samples, key, total, tint) {
         x2: w - right,
         y1: y,
         y2: y,
-        stroke: "#edf1e6",
-        "stroke-dasharray": "3 3",
+        stroke: "#d9d5c8",
+        "stroke-dasharray": "2 3",
       }),
       node(
         "text",
         { x: left - 6, y: y + 3, "text-anchor": "end", class: "chart-axis" },
-        key.endsWith("percent")
-          ? value.toFixed(0) + "%"
-          : (value / 1048576).toFixed(0) + "M",
+        axis
+          ? axis(value)
+          : key.endsWith("percent")
+            ? value.toFixed(0) + "%"
+            : (value / 1048576).toFixed(0) + "M",
       ),
     );
   }
@@ -1254,7 +1387,15 @@ async function selectSpan(id) {
     ...(task
       ? [
           ["Evaluation", task.evaluation_status || "Unknown"],
+          [
+            "Accuracy",
+            Number.isFinite(task.score)
+              ? task.score.toFixed(3)
+              : "Not recorded",
+          ],
+          ["End reason", task.end_reason || "Not recorded"],
           ["Cleanup", task.cleanup_status || "Unknown"],
+          ...(task.flags?.length ? [["Evidence flags", flagText(task)]] : []),
         ]
       : []),
     ...(s.usage
@@ -1269,6 +1410,39 @@ async function selectSpan(id) {
     dl.append(row);
   }
   content.append(dl);
+  if (task?.network) {
+    const n = task.network;
+    content.append(
+      html("h3", "detail-section-title", "Task browser network"),
+    );
+    const card = html("div", "window-resource");
+    card.append(
+      html("strong", "", networkText(n)),
+      html(
+        "small",
+        "",
+        [
+          n.unsent ? `${n.unsent} unsent` : "",
+          n.navigations ? `${n.navigations} navigations` : "",
+          Number.isFinite(n.active_ms) ? `${format(n.active_ms)} active` : "",
+        ]
+          .filter(Boolean)
+          .join(" · ") || "Aggregate counters",
+      ),
+    );
+    const types = Object.entries(n.by_resource_type || {}).sort(
+      (a, b) => b[1] - a[1],
+    );
+    if (types.length)
+      card.append(
+        html(
+          "p",
+          "",
+          types.map(([k, v]) => `${k} ${v.toLocaleString()}`).join(" · "),
+        ),
+      );
+    content.append(card);
+  }
   if (related.length) {
     content.append(
       html("h3", "detail-section-title", "Recorded relationships"),

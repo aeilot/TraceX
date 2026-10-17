@@ -278,6 +278,16 @@ func loadARIES(root string, cache *recordCache) (Profile, error) {
 				return nil
 			}
 			kind = "monitor-index"
+		case "score.json", "network-summary.json":
+			if filepath.Base(filepath.Dir(path)) != "evaluation" {
+				return nil
+			}
+			kind = map[string]string{"score.json": "score", "network-summary.json": "network-summary"}[d.Name()]
+		case "session-outcome.json":
+			if filepath.Base(filepath.Dir(path)) != "harness" {
+				return nil
+			}
+			kind = "session-outcome"
 		case "trajectory.json", "agent-result.json":
 			kind = "opaque"
 		case "trajectory.jsonl":
@@ -331,9 +341,24 @@ func loadARIES(root string, cache *recordCache) (Profile, error) {
 	monitorDisabled := false
 	resourceSeen := map[string]bool{}
 	evidenceLimited := false
+	taskIndex := map[string]int{}
+	for i, t := range p.Tasks {
+		taskIndex[t.ID] = i
+	}
+	monitorInterval := map[string]float64{}
 	for _, a := range artifacts {
 		if a.kind == "opaque" {
 			opaque = true
+			continue
+		}
+		if a.kind == "score" || a.kind == "session-outcome" || a.kind == "network-summary" {
+			i, ok := taskIndex[a.task]
+			if !ok {
+				continue
+			}
+			if !taskSummary(a, &p.Tasks[i]) {
+				invalid++
+			}
 			continue
 		}
 		if a.kind == "monitor-index" {
@@ -343,12 +368,16 @@ func loadARIES(root string, cache *recordCache) (Profile, error) {
 				continue
 			}
 			var index struct {
-				Status string `json:"status"`
-				Reason string `json:"reason"`
+				Status   string      `json:"status"`
+				Reason   string      `json:"reason"`
+				Interval json.Number `json:"interval_milliseconds"`
 			}
 			if decode(data, &index) != nil {
 				invalid++
 				continue
+			}
+			if n, e := index.Interval.Float64(); e == nil && n > 0 && a.task != "" {
+				monitorInterval[a.task] = n
 			}
 			status := index.Status
 			switch status {
@@ -435,6 +464,14 @@ func loadARIES(root string, cache *recordCache) (Profile, error) {
 					return
 				}
 				s := Span{ID: fmt.Sprintf("%s/bridge/%d", a.task, line), TaskID: a.task, AgentID: "", Name: "Bridge · " + op, Kind: "tool", Status: text(v["status"]), Source: "ARIES bridge", DurationMS: duration, Attributes: filterAttributes(map[string]any{"exit_code": v["exit_code"]})}
+				// Non-exec SSH channel requests and zero-duration file-sync
+				// records are bridge bookkeeping, not agent tool calls. They are
+				// retained as evidence but excluded from tool counts.
+				if s.Status == "unsupported" || (op == "sync" && duration == 0) {
+					s.Kind = "other"
+					s.Name = "Bridge bookkeeping · " + op
+					s.Attributes["bridge_role"] = "bookkeeping"
+				}
 				spans = append(spans, timedSpan{span: s, start: start, end: start + int64(duration*1e6)})
 				observe(start)
 			case "resource":
@@ -452,12 +489,19 @@ func loadARIES(root string, cache *recordCache) (Profile, error) {
 				}
 				resourceSeen[key] = true
 				r.MemoryBytes = optionalNumber(v, "memory_usage_bytes")
-				if gpu, ok := v["gpu"].(map[string]any); ok {
-					r.GPUPercent = optionalNumber(gpu, "utilization_percent")
-					r.CPUPercent = nil
-					r.MemoryBytes = nil
+				r.NetworkRxBytes = optionalNumber(v, "network_rx_bytes")
+				r.NetworkTxBytes = optionalNumber(v, "network_tx_bytes")
+				r.PIDs = optionalNumber(v, "pids")
+				r.MemoryLimitBytes = optionalNumber(v, "memory_limit_bytes")
+				r.MemoryPeakBytes = optionalNumber(v, "memory_peak_bytes")
+				if r.MemoryLimitBytes != nil && *r.MemoryLimitBytes == 0 {
+					r.MemoryLimitBytes = nil
 				}
-				if r.CPUPercent == nil && r.MemoryBytes == nil && r.GPUPercent == nil {
+				if gpu, ok := v["gpu"].(map[string]any); ok {
+					r = Resource{TaskID: r.TaskID, Component: r.Component, RuntimeID: r.RuntimeID}
+					r.GPUPercent = optionalNumber(gpu, "utilization_percent")
+				}
+				if r.CPUPercent == nil && r.MemoryBytes == nil && r.GPUPercent == nil && r.NetworkRxBytes == nil && r.NetworkTxBytes == nil && r.PIDs == nil {
 					invalid++
 					return
 				}
@@ -610,6 +654,7 @@ func loadARIES(root string, cache *recordCache) (Profile, error) {
 		p.Resources = append(p.Resources, r.r)
 		p.DurationMS = max(p.DurationMS, r.r.TimeMS)
 	}
+	flagOutliers(&p, monitorInterval)
 	sort.SliceStable(p.Spans, func(i, j int) bool { return p.Spans[i].StartMS < p.Spans[j].StartMS })
 	if invalid > 0 {
 		p.Warnings = appendUnique(p.Warnings, fmt.Sprintf("Skipped %d invalid or unsupported evidence records.", invalid))
@@ -784,4 +829,103 @@ func parseSpan(v map[string]any, task string, line int) (timedSpan, error) {
 		status = "unknown"
 	}
 	return timedSpan{span: Span{ID: task + "/otel/" + trace + "/" + nativeID, TaskID: task, AgentID: agent, RuntimeID: runtimeID, Usage: usage, Name: name, Kind: kind, Status: status, DurationMS: float64(end-start) / 1e6, Source: "OpenTelemetry", Attributes: attrs}, start: start, end: end, rawID: id, rawParent: parent, trace: trace}, nil
+}
+
+// taskSummary imports per-task JSON summaries. Only numeric scores, enum end
+// reasons, and aggregate network counters are kept; answers, gold values,
+// URLs and errors are never decoded into the profile.
+func taskSummary(a artifact, t *Task) bool {
+	data, err := readBounded(a.path)
+	if err != nil {
+		return false
+	}
+	var v map[string]any
+	if decode(data, &v) != nil {
+		return false
+	}
+	switch a.kind {
+	case "score":
+		s := optionalNumber(v, "accuracy")
+		if s == nil || *s > 1 {
+			return false
+		}
+		t.Score = s
+	case "session-outcome":
+		t.EndReason = enumText(text(v["end_reason"]))
+		return t.EndReason != ""
+	case "network-summary":
+		n := &NetworkSummary{Requests: optionalNumber(v, "requests"), Failed: optionalNumber(v, "failed"), Unsent: optionalNumber(v, "unsent"), ResponseBytes: optionalNumber(v, "response_bytes"), ActiveMS: optionalNumber(v, "network_active_ms")}
+		if navs, ok := v["navigations"].([]any); ok {
+			n.Navigations = len(navs)
+		}
+		if m, ok := v["by_resource_type"].(map[string]any); ok {
+			counts := map[string]float64{}
+			for k, x := range m {
+				counts[k] = number(x)
+			}
+			n.ByResourceType = resourceTypeCounts(counts)
+		}
+		if n.Requests == nil && n.ResponseBytes == nil {
+			return false
+		}
+		t.Network = n
+	}
+	return true
+}
+
+// Outlier thresholds: a task far beyond the run median with too few monitor
+// samples for its length has a resource profile that cannot be trusted.
+const outlierFactor = 5
+const sparseMonitorRatio = 0.5
+
+func flagOutliers(p *Profile, interval map[string]float64) {
+	durations := []float64{}
+	for _, t := range p.Tasks {
+		if t.DurationMS > 0 {
+			durations = append(durations, t.DurationMS)
+		}
+	}
+	if len(durations) < 3 {
+		return
+	}
+	sort.Float64s(durations)
+	median := quantile(durations, .5)
+	samples := map[string]map[string]int{}
+	for _, r := range p.Resources {
+		if r.TaskID == "" {
+			continue
+		}
+		if samples[r.TaskID] == nil {
+			samples[r.TaskID] = map[string]int{}
+		}
+		samples[r.TaskID][r.Component+"/"+r.RuntimeID]++
+	}
+	for i := range p.Tasks {
+		t := &p.Tasks[i]
+		if median <= 0 || t.DurationMS <= outlierFactor*median {
+			continue
+		}
+		t.Flags = appendUnique(t.Flags, "duration_outlier")
+		step := interval[t.ID]
+		if step <= 0 {
+			step = 1000
+		}
+		expected := t.DurationMS / step
+		series := samples[t.ID]
+		ratio := 0.0
+		for _, n := range series {
+			ratio += float64(n) / expected
+		}
+		if len(series) > 0 {
+			ratio /= float64(len(series))
+		}
+		message := fmt.Sprintf("Task %s ran %.0f× the run median duration", t.ID, t.DurationMS/median)
+		if ratio < sparseMonitorRatio {
+			t.Flags = appendUnique(t.Flags, "sparse_monitor")
+			message += fmt.Sprintf(" with sparse monitor coverage (%.1f%% of expected samples); its resource profile is incomplete.", ratio*100)
+		} else {
+			message += "."
+		}
+		p.Warnings = appendUnique(p.Warnings, message)
+	}
 }

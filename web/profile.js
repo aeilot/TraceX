@@ -18,7 +18,27 @@
     "page",
     "agent.id",
     "provider",
+    "bridge_role",
   ]);
+  const taskFlags = new Set(["duration_outlier", "sparse_monitor"]);
+  const networkKeys = new Set([
+    "requests",
+    "failed",
+    "unsent",
+    "response_bytes",
+    "active_ms",
+    "navigations",
+  ]);
+  const resourceKeys = [
+    "cpu_percent",
+    "memory_bytes",
+    "gpu_percent",
+    "network_rx_bytes",
+    "network_tx_bytes",
+    "pids",
+    "memory_limit_bytes",
+    "memory_peak_bytes",
+  ];
   const configKeys = new Set([
     "benchmark",
     "harness",
@@ -120,6 +140,25 @@
       if (typeof t.id !== "string" || !t.id || taskIDs.has(t.id))
         throw Error("Tasks require unique IDs.");
       taskIDs.add(t.id);
+      if (
+        t.score != null &&
+        (!Number.isFinite(t.score) || t.score < 0 || t.score > 1)
+      )
+        throw Error("Invalid task score.");
+      if (t.end_reason != null && !/^[a-z0-9_-]{1,64}$/.test(t.end_reason))
+        delete t.end_reason;
+      if (t.network != null) {
+        if (typeof t.network !== "object") throw Error("Invalid task network.");
+        const types = scalars(t.network.by_resource_type, {
+          has: (k) => /^[a-z]{1,20}$/.test(k),
+        });
+        t.network = scalars(t.network, networkKeys);
+        if (Object.keys(types).length) t.network.by_resource_type = types;
+      }
+      if (t.flags != null)
+        t.flags = Array.isArray(t.flags)
+          ? t.flags.filter((f) => taskFlags.has(f))
+          : [];
     }
     for (const s of p.spans) {
       timing(s, "span");
@@ -202,7 +241,7 @@
       for (const k of ["component", "runtime_id"])
         if (r[k] != null && typeof r[k] !== "string")
           throw Error("Invalid resource identity.");
-      for (const k of ["cpu_percent", "memory_bytes", "gpu_percent"])
+      for (const k of resourceKeys)
         if (r[k] != null && (!Number.isFinite(r[k]) || r[k] < 0))
           throw Error(`Invalid ${k} reading.`);
     }
@@ -227,6 +266,10 @@
         "time_quality",
         "evaluation_status",
         "cleanup_status",
+        "score",
+        "end_reason",
+        "network",
+        "flags",
       ]);
     for (const s of p.spans) {
       s.attributes = scalars(s.attributes, attributeKeys);
@@ -253,9 +296,7 @@
         "component",
         "runtime_id",
         "time_ms",
-        "cpu_percent",
-        "memory_bytes",
-        "gpu_percent",
+        ...resourceKeys,
       ]);
     for (const c of p.capabilities || [])
       retain(c, ["name", "status", "reason"]);
@@ -469,7 +510,8 @@
         );
       };
     const succeeded = p.tasks.filter(success).length,
-      failed = p.tasks.filter(failure).length;
+      failed = p.tasks.filter(failure).length,
+      scores = p.tasks.map((t) => t.score).filter(Number.isFinite);
     return {
       agent_count: new Set(p.spans.map((s) => s.agent_id).filter(Boolean)).size,
       span_count: p.spans.length,
@@ -506,6 +548,10 @@
         ? ((succeeded + failed) * 1000) / p.duration_ms
         : 0,
       critical_path: critical(p),
+      score_mean: scores.length
+        ? scores.reduce((a, b) => a + b, 0) / scores.length
+        : null,
+      score_known: scores.length,
     };
   }
   function windowStats(p, id) {

@@ -7,11 +7,12 @@ All timing uses finite, nonnegative milliseconds relative to one run origin. Siz
 | Object | Fields |
 | --- | --- |
 | Profile | `schema_version: 2`, `run_id`, `name`, `duration_ms`, `tasks`, `spans`, `edges`, `resources`, `capabilities`, `warnings`, optional `configuration` |
-| Task | `id`, optional `logical_id`, `name`, `status`, `start_ms`, `duration_ms`, optional `time_quality`, separate `evaluation_status` and `cleanup_status` |
+| Task | `id`, optional `logical_id`, `name`, `status`, `start_ms`, `duration_ms`, optional `time_quality`, separate `evaluation_status` and `cleanup_status`, optional `score` (continuous accuracy in [0, 1]), `end_reason` (lowercase enum), `network` (NetworkSummary), `flags` (`duration_outlier`, `sparse_monitor`) |
+| NetworkSummary | optional `requests`, `failed`, `unsent`, `response_bytes`, `active_ms`, `navigations`, `by_resource_type` (allowlisted browser resource type → count; unknown types fold into `other`) |
 | Span | `id`, `task_id`, `agent_id`, optional `parent_id` and `runtime_id`, `name`, `kind`, `status`, `start_ms`, `duration_ms`, `source`, optional `attributes`, `usage`, `incomplete` |
 | Usage | optional `input_tokens`, `output_tokens`; missing and measured zero differ |
 | Edge | `source`, `target`, `kind` |
-| Resource | optional `task_id`, `component`, `runtime_id`, `time_ms`, optional `cpu_percent`, `memory_bytes`, `gpu_percent` |
+| Resource | optional `task_id`, `component`, `runtime_id`, `time_ms`, optional `cpu_percent`, `memory_bytes`, `gpu_percent`, `memory_limit_bytes`, `memory_peak_bytes`, `pids`, `network_rx_bytes`, `network_tx_bytes` (cumulative per runtime) |
 | Capability | `name`, `status`, optional `reason` |
 
 IDs are unique within each object class. Span/resource task references must resolve. The whole graph, including every edge kind, must be acyclic. A span's `parent_id` derives a parent edge. Repeated edges are deduplicated; explicit edge endpoints must exist.
@@ -38,6 +39,8 @@ Native records may set `attributes.time_quality` to `completion_only` or `unknow
 Task `time_quality: unknown` means its timeline placement is not known. Coverage is unavailable for that task. Empty quality on older normalized inputs preserves their declared interval semantics.
 
 Lifecycle spans use `kind: lifecycle` and `attributes.phase` (`queue`, `sandbox_start`, `prepare`, `bridge_start`, `harness_start`, `execute`, `isolation`, `evaluate`, `cleanup`, or a producer-declared phase). Lifecycle/agent envelopes are excluded from observed leaf-work coverage and concurrency. Completed task latency quantiles use completed outcomes; a current running task is not a finished latency sample.
+
+`evaluation_status` is the benchmark's binary pass/fail; `score` is its continuous accuracy when recorded, so a 0.99 answer can carry `evaluation_status: failed`. Analysis reports `score_mean` over the `score_known` tasks that recorded a score; tasks without one are excluded rather than counted as zero.
 
 ## Metadata
 

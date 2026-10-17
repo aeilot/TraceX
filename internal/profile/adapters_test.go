@@ -215,3 +215,126 @@ func TestBridgeDurationRequiredButExplicitZeroRetained(t *testing.T) {
 		t.Fatal("missing duration fabricated measurement", n)
 	}
 }
+
+func TestTaskScoreEndReasonAndNetworkSummary(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "run-result.json", `{"tasks":[{"task_id":"a","started_at":"2026-01-01T00:00:00Z","duration":1000000000,"harness":{"status":"succeeded"},"evaluation":{"status":"failed"}},{"task_id":"b","started_at":"2026-01-01T00:00:00Z","duration":1000000000}]}`)
+	write(t, root, "a/evaluation/score.json", `{"prediction":"SECRET-PRED","gold":"SECRET-GOLD","accuracy":0.99}`)
+	write(t, root, "a/harness/session-outcome.json", `{"status":"canceled","end_reason":"deadline_exceeded","run_id":"x"}`)
+	write(t, root, "b/harness/session-outcome.json", `{"end_reason":"failed: SECRET error text"}`)
+	write(t, root, "b/evaluation/score.json", `{"accuracy":7}`)
+	write(t, root, "a/evaluation/network-summary.json", `{"requests":10,"failed":2,"unsent":1,"response_bytes":4096,"network_active_ms":120.5,"by_resource_type":{"script":6,"image":3,"https://SECRET":1},"navigations":[{"url":"https://SECRET.example/"},{"url":"https://SECRET.example/2"}]}`)
+	p, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, b := p.Tasks[0], p.Tasks[1]
+	if a.Score == nil || *a.Score != 0.99 || a.EndReason != "deadline_exceeded" || a.EvaluationStatus != "failed" {
+		t.Fatalf("task a %+v", a)
+	}
+	if b.Score != nil || b.EndReason != "" {
+		t.Fatalf("out-of-range score or free-text reason kept %+v", b)
+	}
+	n := a.Network
+	if n == nil || *n.Requests != 10 || *n.Failed != 2 || *n.Unsent != 1 || *n.ResponseBytes != 4096 || *n.ActiveMS != 120.5 || n.Navigations != 2 {
+		t.Fatalf("network %+v", n)
+	}
+	if n.ByResourceType["script"] != 6 || n.ByResourceType["other"] != 1 || len(n.ByResourceType) != 3 {
+		t.Fatalf("resource types %+v", n.ByResourceType)
+	}
+	an := Analyze(p)
+	if an.ScoreKnown != 1 || an.ScoreMean == nil || *an.ScoreMean != 0.99 {
+		t.Fatalf("score mean %+v %v", an.ScoreKnown, an.ScoreMean)
+	}
+	body, _ := json.Marshal(p)
+	if strings.Contains(string(body), "SECRET") {
+		t.Fatal("private payload leaked", string(body))
+	}
+}
+
+func TestResourceNetworkMemoryLimitAndPIDs(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "run-result.json", `{"tasks":[{"task_id":"t","started_at":"2026-01-01T00:00:00Z","duration":3000000000}]}`)
+	write(t, root, "t/monitor/resources.jsonl", `{"time":"2026-01-01T00:00:01Z","component":"sandbox","runtime_id":"r","cpu_percent":0,"memory_usage_bytes":100,"memory_limit_bytes":1000,"memory_peak_bytes":150,"pids":4,"network_rx_bytes":10,"network_tx_bytes":5}
+{"time":"2026-01-01T00:00:02Z","component":"sandbox","runtime_id":"r","memory_usage_bytes":200,"memory_limit_bytes":0,"network_rx_bytes":30,"network_tx_bytes":9}
+`)
+	p, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Resources) != 2 {
+		t.Fatalf("resources %+v", p.Resources)
+	}
+	r := p.Resources[0]
+	if *r.NetworkRxBytes != 10 || *r.NetworkTxBytes != 5 || *r.PIDs != 4 || *r.MemoryLimitBytes != 1000 || *r.MemoryPeakBytes != 150 {
+		t.Fatalf("first sample %+v", r)
+	}
+	if r2 := p.Resources[1]; r2.MemoryLimitBytes != nil || r2.PIDs != nil || *r2.NetworkRxBytes != 30 {
+		t.Fatalf("zero limit must be unknown, missing pids stay missing %+v", r2)
+	}
+}
+
+func TestBridgeBookkeepingIsNotToolWork(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "run-result.json", `{"tasks":[{"task_id":"t","started_at":"2026-01-01T00:00:00Z","duration":1000000000}]}`)
+	write(t, root, "t/bridge/tool-calls.jsonl", `{"timestamp":"2026-01-01T00:00:00.5Z","operation_class":"unknown","status":"unsupported","duration_ms":0,"error":"SECRET"}
+{"timestamp":"2026-01-01T00:00:00.5Z","operation_class":"sync","status":"denied","duration_ms":0}
+{"timestamp":"2026-01-01T00:00:00.5Z","operation_class":"agent","status":"completed","duration_ms":200,"exit_code":0}
+`)
+	p, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kinds := map[string]int{}
+	for _, s := range p.Spans {
+		if s.Source != "ARIES bridge" {
+			continue
+		}
+		kinds[s.Kind]++
+		if s.Kind == "other" && s.Attributes["bridge_role"] != "bookkeeping" {
+			t.Fatalf("bookkeeping span unlabeled %+v", s)
+		}
+	}
+	if kinds["tool"] != 1 || kinds["other"] != 2 {
+		t.Fatalf("bridge kinds %v", kinds)
+	}
+	for _, k := range Analyze(p).Kinds {
+		if k.Kind == "tool" && (k.Count != 1 || k.SummedMS != 200) {
+			t.Fatalf("tool stats %+v", k)
+		}
+	}
+}
+
+func TestDurationOutlierWithSparseMonitorWarns(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "run-result.json", `{"tasks":[
+{"task_id":"a","started_at":"2026-01-01T00:00:00Z","duration":10000000000},
+{"task_id":"b","started_at":"2026-01-01T00:00:00Z","duration":12000000000},
+{"task_id":"c","started_at":"2026-01-01T00:00:00Z","duration":11000000000},
+{"task_id":"slow","started_at":"2026-01-01T00:00:00Z","duration":600000000000}]}`)
+	write(t, root, "slow/monitor/index.json", `{"status":"succeeded","interval_milliseconds":1000}`)
+	write(t, root, "slow/monitor/resources.jsonl", `{"time":"2026-01-01T00:00:01Z","component":"sandbox","runtime_id":"r","memory_usage_bytes":1}
+{"time":"2026-01-01T00:00:02Z","component":"sandbox","runtime_id":"r","memory_usage_bytes":1}
+`)
+	write(t, root, "a/monitor/resources.jsonl", `{"time":"2026-01-01T00:00:01Z","component":"sandbox","runtime_id":"q","memory_usage_bytes":1}
+`)
+	p, err := Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, task := range p.Tasks {
+		want := task.ID == "slow"
+		if got := len(task.Flags) == 2 && task.Flags[0] == "duration_outlier" && task.Flags[1] == "sparse_monitor"; got != want {
+			t.Fatalf("flags %s %v", task.ID, task.Flags)
+		}
+	}
+	found := false
+	for _, w := range p.Warnings {
+		if strings.Contains(w, "Task slow ran 52× the run median") && strings.Contains(w, "sparse monitor coverage") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("missing outlier warning %v", p.Warnings)
+	}
+}

@@ -85,3 +85,45 @@ test("metadata allowlist drops private bodies on browser import", () => {
 test("large resource series peak calculation does not spread function arguments", () => {
   assert.equal(maximum(Array.from({ length: 100000 }, (_, i) => i)), 99999);
 });
+test("task score, end reason, network summary and flags survive import with private keys dropped", () => {
+  const p = fixture();
+  p.tasks[0] = {
+    ...p.tasks[0],
+    score: 0.77,
+    end_reason: "deadline_exceeded",
+    network: {
+      requests: 5,
+      failed: 1,
+      url: "https://SECRET",
+      by_resource_type: { script: 3, "https://SECRET": 1 },
+    },
+    flags: ["duration_outlier", "SECRET"],
+    answer: "SECRET",
+  };
+  p.resources = [
+    { time_ms: 0, network_rx_bytes: 10, pids: 3, memory_limit_bytes: 100 },
+  ];
+  validate(p);
+  assert.equal(p.tasks[0].score, 0.77);
+  assert.equal(p.tasks[0].end_reason, "deadline_exceeded");
+  assert.deepEqual(p.tasks[0].flags, ["duration_outlier"]);
+  assert.deepEqual(p.tasks[0].network, {
+    requests: 5,
+    failed: 1,
+    by_resource_type: { script: 3 },
+  });
+  assert.equal(p.resources[0].pids, 3);
+  assert.ok(!JSON.stringify(p).includes("SECRET"));
+  const bad = fixture();
+  bad.tasks[0].score = 2;
+  assert.throws(() => validate(bad));
+});
+test("mean accuracy excludes tasks without a recorded score", () => {
+  const { analyze } = require("./profile.js");
+  const p = fixture();
+  p.tasks.push({ id: "u", start_ms: 0, duration_ms: 10, score: 0.5 });
+  p.tasks.push({ id: "v", start_ms: 0, duration_ms: 10, score: 1 });
+  const a = analyze(validate(p));
+  assert.equal(a.score_mean, 0.75);
+  assert.equal(a.score_known, 2);
+});
