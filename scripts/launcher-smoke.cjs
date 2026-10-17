@@ -39,6 +39,7 @@ async function smoke(page, baseURL='http://127.0.0.1:4319') {
   await page.waitForFunction(id=>document.querySelector('#run-picker').value===id,running.run_id);
   const initial=await page.evaluate(id=>fetch('/api/profile?run='+id).then(r=>r.json()),running.run_id);
   assert.equal(initial.name,'Synthetic launcher fixture');assert.ok(initial.spans.length>0);
+  await page.waitForSelector('.dag-node[aria-label*="Synthetic fixture agent"]');
   await page.waitForFunction(async({id,duration})=>{const p=await fetch('/api/profile?run='+id).then(r=>r.json());return p.duration_ms>duration;},{id:running.run_id,duration:initial.duration_ms});
   await page.locator('[data-view="timeline"]').click();
   await page.waitForSelector('.timeline-bar');
