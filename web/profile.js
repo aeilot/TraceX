@@ -55,6 +55,11 @@
     "max_tokens",
     "context_length",
     "reasoning_effort",
+    "agent_timeout_seconds",
+    "sandbox_shm_size_mb",
+    "task_count",
+    "harness_image",
+    "sandbox_image",
   ]);
   const edgeKinds = new Set([
     "parent",

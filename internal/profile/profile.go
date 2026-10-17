@@ -302,7 +302,7 @@ func Validate(p *Profile) error {
 	return nil
 }
 
-var configurationKeys = map[string]bool{"benchmark": true, "harness": true, "model": true, "provider": true, "concurrency": true, "cpu_limit": true, "memory_limit_mb": true, "harness_cpu_limit": true, "harness_memory_limit_mb": true, "sandbox_cpu_limit": true, "sandbox_memory_limit_mb": true, "temperature": true, "max_tokens": true, "context_length": true, "reasoning_effort": true}
+var configurationKeys = map[string]bool{"benchmark": true, "harness": true, "model": true, "provider": true, "concurrency": true, "cpu_limit": true, "memory_limit_mb": true, "harness_cpu_limit": true, "harness_memory_limit_mb": true, "sandbox_cpu_limit": true, "sandbox_memory_limit_mb": true, "temperature": true, "max_tokens": true, "context_length": true, "reasoning_effort": true, "agent_timeout_seconds": true, "sandbox_shm_size_mb": true, "task_count": true, "harness_image": true, "sandbox_image": true}
 
 func filterConfiguration(in map[string]any) map[string]any {
 	out := map[string]any{}
