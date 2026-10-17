@@ -1,46 +1,70 @@
-# Normalized profile schema v1
+# Normalized profile schema v2
 
-All times are finite, nonnegative milliseconds relative to the run origin. Sizes use bytes; resource utilization uses percent. JSON uses snake_case. A normalized file can be loaded with `--run` or produced with `--export`.
+Schema v2 preserves explicit multi-parent relationships, native timing quality, model usage, runtime context, and experiment configuration. Version 1 inputs are accepted and normalized to v2; v1 edges remain restricted to parent relationships.
+
+All timing uses finite, nonnegative milliseconds relative to one run origin. Sizes use bytes; utilization uses percent. An omitted/null metric is unavailable; zero is an observed zero.
 
 | Object | Fields |
 | --- | --- |
-| Profile | `schema_version: 1`, `run_id`, `name`, `duration_ms`, `tasks`, `spans`, `edges`, `resources`, `capabilities`, `warnings` |
-| Task | `id`, `name`, `status`, `start_ms`, `duration_ms`, `evaluation_status`, `cleanup_status` |
-| Span | `id`, `task_id`, `agent_id`, optional `parent_id`, `name`, `kind`, `status`, `start_ms`, `duration_ms`, `source`, optional `attributes` |
-| Edge | `source`, `target`, `kind: "parent"` |
+| Profile | `schema_version: 2`, `run_id`, `name`, `duration_ms`, `tasks`, `spans`, `edges`, `resources`, `capabilities`, `warnings`, optional `configuration` |
+| Task | `id`, optional `logical_id`, `name`, `status`, `start_ms`, `duration_ms`, optional `time_quality`, separate `evaluation_status` and `cleanup_status` |
+| Span | `id`, `task_id`, `agent_id`, optional `parent_id` and `runtime_id`, `name`, `kind`, `status`, `start_ms`, `duration_ms`, `source`, optional `attributes`, `usage`, `incomplete` |
+| Usage | optional `input_tokens`, `output_tokens`; missing and measured zero differ |
+| Edge | `source`, `target`, `kind` |
 | Resource | optional `task_id`, `component`, `runtime_id`, `time_ms`, optional `cpu_percent`, `memory_bytes`, `gpu_percent` |
 | Capability | `name`, `status`, optional `reason` |
 
-IDs are unique within each object class. A span must reference an existing task. A resource's optional task ID must resolve. Parent IDs must resolve to existing spans and form an acyclic graph. Explicit parent IDs determine graph edges; speculative edges are rejected. Arrays can be empty.
+IDs are unique within each object class. Span/resource task references must resolve. The whole graph, including every edge kind, must be acyclic. A span's `parent_id` derives a parent edge. Repeated edges are deduplicated; explicit edge endpoints must exist.
 
-An absent resource value means no reading; a numeric zero means a measured zero. Task execution, evaluation, and cleanup statuses are separate so success at one stage cannot hide failure at another. Source labels and capability warnings let viewers distinguish observed detail from missing coverage.
+## Relationships
 
-Example:
+| Kind | Meaning |
+| --- | --- |
+| `parent` | Containment of a child operation; must agree with its `parent_id` |
+| `spawn` | Explicitly recorded agent/task creation |
+| `call` | Explicit invocation relationship |
+| `return` | Explicit result-return relationship |
+| `dependency` | Recorded prerequisite work |
+| `join` | Recorded branch completion prerequisite; several sources can target the same join |
+
+A return relationship targets a distinct continuation/result span rather than pointing back to its containing invocation, which would create a cycle.
+
+Timestamp order and overlap never create edges. Producer declarations are evidence, not an automatic guarantee of finish-before-start semantics. The completion critical-path analysis uses only dependency/join/return edges whose source finishes before the target starts. If these edges contradict timing or include incomplete work, the path is unavailable. It sums recorded durations and excludes waits not represented by spans; it is not the run's elapsed time.
+
+## Timing quality and outcomes
+
+Native records may set `attributes.time_quality` to `completion_only` or `unknown`. Such markers retain their timestamp and usage but do not count as a measured zero-duration model call. `incomplete: true` identifies an operation without a recorded end. A live producer replaces that span with its completed record under the same ID.
+
+Task `time_quality: unknown` means its timeline placement is not known. Coverage is unavailable for that task. Empty quality on older normalized inputs preserves their declared interval semantics.
+
+Lifecycle spans use `kind: lifecycle` and `attributes.phase` (`queue`, `sandbox_start`, `prepare`, `bridge_start`, `harness_start`, `execute`, `isolation`, `evaluate`, `cleanup`, or a producer-declared phase). Lifecycle/agent envelopes are excluded from observed leaf-work coverage and concurrency. Completed task latency quantiles use completed outcomes; a current running task is not a finished latency sample.
+
+## Metadata
+
+Configuration and attributes use explicit scalar allowlists. Configuration supports experiment conditions such as benchmark, harness, model, provider, concurrency, and independent runtime resource limits. Missing fields are unknown, not confirmed equality. See [ARIES integration](aries-integration.md) for the producer snapshot.
+
+Attributes retain selected model, usage, tool, phase, timing-quality, provider, and browser resource-type metadata. Arbitrary fields, raw errors, URLs, prompts, arguments, and outputs are not part of the export contract. Browser normalization also removes unknown object fields.
+
+## Branch-and-join example
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "run_id": "example",
-  "name": "Example backend",
+  "name": "Explicit parallel work",
   "duration_ms": 1000,
-  "tasks": [{
-    "id": "task-1-attempt-1", "name": "Inspect repository", "status": "success",
-    "start_ms": 0, "duration_ms": 1000,
-    "evaluation_status": "unknown", "cleanup_status": "unknown"
-  }],
+  "configuration": {"harness": "custom", "concurrency": 2},
+  "tasks": [{"id": "attempt-1", "name": "Research", "status": "succeeded", "start_ms": 0, "duration_ms": 1000, "evaluation_status": "unknown", "cleanup_status": "unknown"}],
   "spans": [
-    {"id": "agent", "task_id": "task-1-attempt-1", "agent_id": "researcher",
-     "name": "Research", "kind": "agent", "status": "success",
-     "start_ms": 0, "duration_ms": 1000, "source": "custom-backend"},
-    {"id": "tool", "parent_id": "agent", "task_id": "task-1-attempt-1", "agent_id": "researcher",
-     "name": "Read files", "kind": "tool", "status": "success",
-     "start_ms": 100, "duration_ms": 200, "source": "custom-backend"}
+    {"id": "a", "task_id": "attempt-1", "agent_id": "researcher-a", "name": "Branch A", "kind": "tool", "status": "succeeded", "start_ms": 0, "duration_ms": 400, "source": "custom"},
+    {"id": "b", "task_id": "attempt-1", "agent_id": "researcher-b", "name": "Branch B", "kind": "tool", "status": "succeeded", "start_ms": 0, "duration_ms": 500, "source": "custom"},
+    {"id": "join", "task_id": "attempt-1", "agent_id": "coordinator", "name": "Synthesis", "kind": "model", "status": "succeeded", "start_ms": 600, "duration_ms": 300, "source": "custom", "usage": {"input_tokens": 100, "output_tokens": 20}}
   ],
-  "edges": [{"source": "agent", "target": "tool", "kind": "parent"}],
+  "edges": [{"source": "a", "target": "join", "kind": "join"}, {"source": "b", "target": "join", "kind": "join"}],
   "resources": [],
-  "capabilities": [{"name": "resources", "status": "unsupported", "reason": "Not recorded by this backend"}],
+  "capabilities": [{"name": "resources", "status": "unsupported", "reason": "Not recorded"}],
   "warnings": []
 }
 ```
 
-Profile validation limits total task, span, and resource records to 100,000. Span attributes are restricted to selected model, usage, tool, exit-code, and synthetic metadata. Prompts, tool arguments, and outputs are not part of this schema contract.
+Profiles are bounded to one million combined tasks, spans, resources, and edges. Normalized file and browser import size limits are described in [inputs](inputs.md); server pages do not change or truncate the underlying profile.

@@ -1,65 +1,71 @@
-// Package server serves a read-only snapshot and the embedded profiler UI.
+// Package server serves read-only, indexed run snapshots and the profiler UI.
 package server
 
 import (
+	"context"
 	"encoding/json"
-	"fmt"
+	"github.com/aeilot/TraceX/internal/profile"
+	"github.com/aeilot/TraceX/web"
 	"io/fs"
 	"net/http"
 	"strings"
 	"time"
-
-	"github.com/aeilot/TraceX/internal/profile"
-	"github.com/aeilot/TraceX/web"
 )
 
-// New returns a handler for a fixed snapshot. No run directories or raw logs are served.
 func New(p profile.Profile) (http.Handler, error) {
-	data, err := json.Marshal(p)
-	if err != nil {
-		return nil, fmt.Errorf("encode profile: %w", err)
-	}
-	assets := http.FileServer(http.FS(web.Files))
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			w.Header().Set("Allow", "GET, HEAD")
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		switch r.URL.Path {
-		case "/api/profile":
-			w.Header().Set("Cache-Control", "no-store")
-			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			if r.Method != http.MethodHead {
-				_, _ = w.Write(data)
-			}
-		case "/api/health":
-			w.Header().Set("Cache-Control", "no-store")
-			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			if r.Method != http.MethodHead {
-				_, _ = w.Write([]byte("{\"status\":\"ok\"}\n"))
-			}
-		default:
-			name := strings.TrimPrefix(r.URL.Path, "/")
-			if name == "" {
-				name = "index.html"
-			}
-			// An explicit allowlist also prevents FileServer directory listings.
-			if name != "index.html" && name != "app.js" && name != "profile.js" && name != "styles.css" {
-				http.NotFound(w, r)
-				return
-			}
-			if _, err := fs.Stat(web.Files, name); err != nil {
-				http.NotFound(w, r)
-				return
-			}
-			assets.ServeHTTP(w, r)
-		}
-	}), nil
+	return NewWorkspace(context.Background(), []Source{{Profile: &p}}, Options{})
 }
-
-// HTTP configures bounded headers and idle connections for a local server.
+func (ws *workspace) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if strings.HasPrefix(r.URL.Path, "/api/") {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		ws.fail(w, r, 405, "method not allowed")
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/api/") {
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		switch r.URL.Path {
+		case "/api/health":
+			ws.reply(w, r, map[string]string{"status": "ok"})
+		case "/api/runs":
+			ws.runs(w, r)
+		case "/api/events":
+			ws.events(w, r)
+		case "/api/profile", "/api/view", "/api/span", "/api/analysis":
+			ws.query(w, r)
+		default:
+			ws.fail(w, r, http.StatusNotFound, "unknown API route")
+		}
+		return
+	}
+	name := strings.TrimPrefix(r.URL.Path, "/")
+	if name == "" {
+		name = "index.html"
+	}
+	if name != "index.html" && name != "app.js" && name != "profile.js" && name != "analytics.js" && name != "styles.css" {
+		http.NotFound(w, r)
+		return
+	}
+	if _, err := fs.Stat(web.Files, name); err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	http.FileServer(http.FS(web.Files)).ServeHTTP(w, r)
+}
+func (ws *workspace) reply(w http.ResponseWriter, r *http.Request, v any) {
+	if r.Method != http.MethodHead {
+		_ = json.NewEncoder(w).Encode(v)
+	}
+}
+func (ws *workspace) fail(w http.ResponseWriter, r *http.Request, status int, msg string) {
+	w.WriteHeader(status)
+	ws.reply(w, r, map[string]string{"error": msg})
+}
 func HTTP(addr string, handler http.Handler) *http.Server {
 	return &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 60 * time.Second}
 }

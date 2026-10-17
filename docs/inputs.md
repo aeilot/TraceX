@@ -2,39 +2,60 @@
 
 ## ARIES run directory
 
-Pass the directory containing `run-result.json` to `--run`. TraceX reads task occurrences and separate harness, evaluation, and cleanup outcomes from that result. It discovers recognized evidence files under task directories and `infrastructure/`:
+Pass a completed or active ARIES run directory to `--run`. Completed results supply authoritative task identities and independent harness, evaluation, and cleanup outcomes. Before `run-result.json` exists, the loader discovers tasks only from known component directories or explicit task lifecycle log IDs, not arbitrary folders such as model-runtime logs.
 
 | Artifact | Used evidence |
 | --- | --- |
-| `run-result.json` | Run name/ID, task identity, start timestamps, durations and outcomes |
-| `otel-spans.jsonl` | Recognized per-line OpenTelemetry span records, explicit parents, selected metadata |
-| `tool-calls.jsonl` | Bridge operation class, timestamp, duration and outcome |
-| `resources.jsonl` | CPU percent, memory usage bytes, optional GPU utilization |
-| `monitor/index.json` | Observation status, including failed, unsupported and disabled scopes |
-| `trajectory.json`, `trajectory.jsonl`, `*.trajectory.*`, `agent-result.json` | Reported as unsupported opaque trajectory evidence |
+| `run-result.json` | Task occurrence IDs, actual start, optional admission timestamp, duration, and separate outcomes |
+| `run-profile.json` / `profile.json` | Allowlisted experiment configuration only |
+| `aries.log` | Explicit paired task-phase records, measured durations, recorded predecessor IDs |
+| `otel-spans.jsonl` | Timed spans, explicit parents, selected identity and model metadata |
+| `tool-calls.jsonl` | Bridge operation class, completion timestamp, duration, outcome |
+| `resources.jsonl` | CPU percent, memory bytes, optional device GPU utilization |
+| `monitor/index.json` | Observation status including failed, disabled, unsupported and canceled scopes |
+| `*.trajectory.jsonl`, `trajectory.jsonl` | Recognized OpenClaw native records |
+| `browser-network.jsonl` | BrowserBench request/page intervals without URLs or payloads |
+| `events.jsonl` | Optional backend-neutral normalized updates |
 
-The loader expects ARIES task evidence below a directory named for its task ID. Repeated task IDs get distinct occurrence IDs; evidence that cannot be assigned to a unique occurrence is skipped with a warning. Shared infrastructure samples keep their component/runtime identity and are not attributed to tasks.
+Evidence under a task directory must resolve to its exact occurrence. Duplicate legacy task IDs remain distinct, but ambiguous artifacts are skipped with a warning. Shared infrastructure retains run-level scope. Unknown filenames and nonmatching record shapes never become fabricated spans.
 
-Input files are read as data and never executed. Unknown filenames are ignored. Malformed records and unsupported artifact shapes produce warnings rather than fabricated spans. An invalid run-result or normalized profile fails loading. Files must be regular files; symlink files are skipped during discovery.
+Input files are data, never commands. Symlink evidence files are not followed. An invalid metadata/profile fails loading. Invalid native lines produce partial-coverage warnings; partial trailing JSON is retried. A malformed complete live event preserves the previous valid server revision.
 
-## Harness telemetry
+## Hermes / OpenTelemetry
 
-The recognized `otel-spans.jsonl` format uses one JSON span per line, with `start_time_unix_nano` / `end_time_unix_nano` or RFC3339 `start_time` / `end_time`, `span_id`, optional `parent_span_id` / `parent_id`, and optional `trace_id`. IDs can also be supplied under `context`. Parent relationships resolve within a task and trace. This is a retained artifact adapter, not a general OTLP network receiver.
+One JSON span per line supplies `start_time_unix_nano` / `end_time_unix_nano` or RFC3339 `start_time` / `end_time`, `span_id`, optional `parent_span_id` / `parent_id`, and optional `trace_id`. IDs may also live under `context`. Parents resolve within a task/trace. This is a retained artifact adapter, not an OTLP receiver.
 
-Recognized span names classify model, tool, browser, or agent work; unknown names stay `other`. Agent identities come only from explicit `agent_id` / `attributes.agent.id`; absent identities use unassigned task lanes and are not counted as observed agents. These classes assist navigation; they do not establish backend execution semantics. Missing/ambiguous parent IDs omit edges and preserve independent roots. Invalid cyclic parent links are omitted with warnings. Bridge calls have no inferred parent link to harness spans, so two telemetry streams can describe overlapping work without being treated as additive wall time.
+Recognized names classify model, tool, browser, or agent work; unknown kinds remain `other`. Explicit `agent_id` / `attributes.agent.id` identify actors. An unassigned task lane is not a measured agent identity. Selected usage fields are retained when recorded; missing usage remains unavailable. Ambiguous parents and malformed cyclic native links are omitted with warnings.
 
-Native OpenClaw trajectories currently lack a supported timing adapter. A run can still show its task lifecycle, bridge evidence, resources, and any recognized OpenTelemetry evidence. TraceX does not claim complete agent coverage from those partial sources.
+Bridge calls have no guessed parent to a harness call. Both streams can observe the same operation; they must not be added as if they were disjoint wall time. Bridge start is derived from its recorded completion timestamp minus duration, not treated as a completion timestamp on the left edge.
 
-BrowserBench remains an optional ARIES workload extension. This release can display browser spans provided through recognized telemetry or normalized JSON. It does not parse arbitrary browser HAR, CDP, or sandbox timing files. No browser evidence is required for the main profiler.
+## OpenClaw
+
+The native adapter recognizes `session.started`, `session.ended`, `model.completed`, explicit `tool.started`/`tool.completed` with `toolCallId`, and message tool calls/results with matching explicit IDs. Session intervals and tool pairs are measurable only when both endpoints exist. Unfinished records stay incomplete.
+
+A model completion may supply input/output usage but no request start. It becomes a completion marker with unavailable duration, not a zero-latency model request. Unsupported native formats remain partial/unsupported; the parser does not read arbitrary message content as instructions or render prompts and outputs.
+
+## BrowserBench
+
+The adapter reads sandbox-produced request `start_ms` and completion (`timing.response_end` relative to start, or valid recorded `end_ms`) and page navigation timing. Requests are named only by allowed resource type; URL/query/header/body data is omitted. Failed unsent requests do not become measured network intervals. Browser tool and network intervals can overlap; they remain distinct kinds.
+
+These artifacts are written inside the agent's sandbox. Their integrity is not independently verified, and the warning accompanies the profile. TraceX does not parse arbitrary HAR/CDP dumps or call page-load time CPU compute.
 
 ## Other backends
 
-Emit [normalized TraceX JSON](schema.md) and load it with `--run`. Explicit parent IDs support branched agent DAGs, including cross-agent child spans. Task IDs must distinguish execution occurrences. Omitted measurements should carry a capability reason; do not use zero as a substitute for unsupported collection.
+Emit [schema v2 JSON](schema.md) or [newline-committed events](events.md). `--run custom.jsonl` accepts an event file directly, including an initially empty stream. Explicit relationship kinds support branches and multi-parent joins. No provider-specific telemetry is required for the generic event contract.
 
-## Bounds and interpretation
+## Limits
 
-The loader limits a file to 32 MiB, discovered evidence to 256 MiB, discovery to 20,000 entries and eight directory levels, and JSONL records to 1 MiB. The profile record limit is 100,000. Browser loading additionally limits spans to 20,000, and graph/timeline rendering shows up to 350/2,500 matching spans with an explicit truncation label. Use task, type, or search filters to inspect smaller subsets. A partial read is reported in warnings. These bounds keep a local snapshot manageable; large-run streaming and aggregation are future work.
+- Normalized JSON and small metadata files: 32 MiB each; browser import: 32 MiB.
+- Discovered native evidence / event stream: 256 MiB. Native JSONL records: 4 MiB; event records: 8 MiB.
+- Discovery: 20,000 entries and eight nested levels.
+- Profile: one million combined tasks, spans, resources and edges. Reaching native evidence limits marks partial coverage; invalid normalized profiles fail validation.
+- API pages: 250 spans by default, 1,000 maximum; browser choices 50/250/500.
+- Resource envelopes: 300 observations by default, 1,000 maximum, with extrema and gap preservation. An impossible budget returns an explicit `resource_error` while span pages remain usable; choose a runtime or narrower window.
 
-The first CPU sample for each ARIES runtime is a counter baseline and is omitted from the CPU curve. Later measured zero values are retained.
+The retained normalized profile and parsed JSONL checkpoints live in memory. Unchanged native files are not decoded again; growing files read appended bytes, while normalized indexes/analysis are rebuilt. This supports large local runs, not unlimited retention or a persistent distributed database. Mount discovery happens at startup; new sibling run directories require restarting `--runs-dir` discovery.
 
-The timeline origin is the earliest retained task or observation timestamp. Cross-process clock synchronization is not checked. Unobserved gaps cannot be identified as local agent compute, provider queueing, or network wait without additional evidence. Client spans do not reveal server-side prefill/decode time. GPU readings may cover a shared device. Coverage labels and warnings belong to the result and should accompany exported research findings.
+The first ARIES CPU observation per runtime is a counter baseline and is omitted from the CPU curve. Later measured zero is retained. Missing metric values and outages remain gaps. Device-level GPU readings and shared bridge resources are not apportioned to tasks.
+
+Run origin is the earliest retained task or observation timestamp. Cross-process clock synchronization is not checked. Missing coverage cannot be classified as local compute, provider queuing, or network wait without evidence. Client model spans do not reveal provider prefill/decode timing.

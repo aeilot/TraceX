@@ -83,7 +83,7 @@ invalid`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(p.Spans) != 4 || len(p.Edges) != 1 {
+	if len(p.Spans) != 5 || len(p.Edges) != 1 {
 		t.Fatalf("spans=%d edges=%d", len(p.Spans), len(p.Edges))
 	}
 	if p.Tasks[0].EvaluationStatus != "failed" || p.Tasks[0].Status != "succeeded" {

@@ -73,3 +73,19 @@ func TestOccupiedPort(t *testing.T) {
 		t.Fatalf("expected actionable listen error, got %v", err)
 	}
 }
+
+func TestMultipleSourcesExportRejected(t *testing.T) {
+	var out, stderr bytes.Buffer
+	err := run(context.Background(), []string{"--run", "a", "--run", "b", "--export", "-"}, &out, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "single") {
+		t.Fatalf("expected single-source restriction: %v", err)
+	}
+}
+func TestDiscoveryErrors(t *testing.T) {
+	var out, stderr bytes.Buffer
+	for _, args := range [][]string{{"--runs-dir", t.TempDir()}, {"--watch", "-1s"}, {"--run", ""}} {
+		if e := run(context.Background(), args, &out, &stderr); e == nil {
+			t.Fatalf("expected error: %v", args)
+		}
+	}
+}

@@ -1,18 +1,31 @@
 "use strict";
-const { validate, union, maximum } = globalThis.TraceXProfile;
-const $ = (s) => document.querySelector(s);
-const NS = "http://www.w3.org/2000/svg";
+const {
+  validate,
+  union,
+  maximum,
+  analyze,
+  windowStats,
+  page: localPage,
+} = globalThis.TraceXProfile;
+const $ = (s) => document.querySelector(s),
+  NS = "http://www.w3.org/2000/svg";
 const colors = {
   agent: "#218b80",
   model: "#7075d8",
   tool: "#d79a45",
   browser: "#4998bf",
+  network: "#59a9bc",
   evaluation: "#87978a",
+  lifecycle: "#94a79a",
   task: "#628d89",
   other: "#8b9697",
 };
 const state = {
   profile: null,
+  analysis: null,
+  runs: [],
+  runKey: "",
+  imports: new Map(),
   task: "all",
   kind: "all",
   query: "",
@@ -21,8 +34,24 @@ const state = {
   zoom: 1,
   runtime: "all",
   imported: false,
+  pageOffset: 0,
+  pageLimit: 250,
+  totalSpans: 0,
+  hiddenEdges: 0,
+  rangeStart: 0,
+  rangeEnd: null,
+  revision: 0,
+  paused: false,
+  critical: false,
+  stream: null,
+  watchInterval: 0,
+  runtimeIDs: [],
+  resourceError: "",
+  resourceReturned: 0,
+  resourceTotal: 0,
+  request: 0,
 };
-let toastTimer;
+let toastTimer, searchTimer;
 function notify(message) {
   $("#toast").textContent = message;
   $("#toast").hidden = false;
@@ -42,14 +71,27 @@ function html(tag, cls, text) {
   return e;
 }
 function format(ms) {
+  if (ms == null || !Number.isFinite(ms)) return "—";
   if (ms < 1000) return `${Math.round(ms)} ms`;
   if (ms < 60000) return `${(ms / 1000).toFixed(ms < 10000 ? 2 : 1)} s`;
   return `${Math.floor(ms / 60000)}m ${((ms % 60000) / 1000).toFixed(1)}s`;
 }
 function bytes(n) {
-  if (n === null || n === undefined) return "Unavailable";
-  if (n >= 1073741824) return `${(n / 1073741824).toFixed(2)} GiB`;
-  return `${(n / 1048576).toFixed(1)} MiB`;
+  if (n == null) return "Unavailable";
+  return n >= 1073741824
+    ? `${(n / 1073741824).toFixed(2)} GiB`
+    : `${(n / 1048576).toFixed(1)} MiB`;
+}
+function spanDuration(s) {
+  return s.incomplete
+    ? "In progress"
+    : ["completion_only", "unknown"].includes(s.attributes?.time_quality)
+      ? "Timing unavailable"
+      : format(s.duration_ms);
+}
+function short(s, n = 26) {
+  s = String(s || "");
+  return s.length > n ? s.slice(0, n - 1) + "…" : s;
 }
 function kind(s) {
   return s.kind || "other";
@@ -57,61 +99,215 @@ function kind(s) {
 function color(s) {
   return colors[kind(s)] || colors.other;
 }
-function short(s, n = 26) {
-  s = String(s || "");
-  return s.length > n ? s.slice(0, n - 1) + "…" : s;
-}
 function visible() {
-  return state.profile.spans.filter(
-    (s) =>
-      (state.task === "all" || s.task_id === state.task) &&
-      (state.kind === "all" || kind(s) === state.kind) &&
-      (!state.query ||
-        [s.name, s.agent_id, s.id, s.task_id]
-          .join(" ")
-          .toLowerCase()
-          .includes(state.query)),
-  );
+  return state.profile?.spans || [];
 }
 function edges() {
-  const p = state.profile;
-  return (
-    p.edges ||
-    p.spans
-      .filter((s) => s.parent_id)
-      .map((s) => ({ source: s.parent_id, target: s.id, kind: "parent" }))
-  );
+  return state.profile?.edges || [];
 }
-function setProfile(p, imported = false) {
-  validate(p);
-  state.profile = p;
-  state.imported = imported;
+function bounds() {
+  const end = state.rangeEnd ?? state.profile?.duration_ms ?? 1;
+  return {
+    start: state.rangeStart,
+    end: Math.max(state.rangeStart + 0.001, end),
+    duration: Math.max(0.001, end - state.rangeStart),
+  };
+}
+async function json(url) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    let msg = `HTTP ${response.status}`;
+    try {
+      const error = await response.json();
+      msg = error.error || msg;
+    } catch {}
+    throw Error(msg);
+  }
+  return response.json();
+}
+function allRuns() {
+  return [
+    ...state.runs,
+    ...[...state.imports].map(([id, p]) => ({
+      id,
+      name: p.name,
+      run_id: p.run_id,
+      duration_ms: p.duration_ms,
+      span_count: p.spans.length,
+      configuration: p.configuration,
+      live: false,
+    })),
+  ];
+}
+function updateRunPickers() {
+  const runs = allRuns();
+  for (const id of [
+    "run-picker",
+    "run-picker-mobile",
+    "compare-left",
+    "compare-right",
+  ]) {
+    const select = $("#" + id),
+      old = select.value;
+    select.replaceChildren();
+    for (const run of runs)
+      select.add(new Option(run.name || run.run_id || run.id, run.id));
+    if (id === "run-picker" || id === "run-picker-mobile")
+      select.value = state.runKey;
+    else
+      select.value = runs.some((r) => r.id === old)
+        ? old
+        : id === "compare-left"
+          ? state.runKey
+          : runs.find((r) => r.id !== state.runKey)?.id || state.runKey;
+  }
+  $(".nav-count").textContent = runs.length;
+}
+function resetFilters() {
   state.task = "all";
   state.kind = "all";
   state.query = "";
   state.selected = null;
   state.zoom = 1;
   state.runtime = "all";
+  state.pageOffset = 0;
+  state.rangeStart = 0;
+  state.rangeEnd = null;
   $("#search").value = "";
   $("#zoom").value = 1;
   closeInspector();
-  $("#notice").hidden = true;
-  render();
 }
 async function loadSource() {
   try {
-    const res = await fetch("/api/profile");
-    if (!res.ok) throw Error(`Source returned HTTP ${res.status}`);
-    setProfile(await res.json());
+    const data = await json("/api/runs");
+    state.runs = data.runs || [];
+    state.watchInterval = data.watch_interval_ms || 0;
+    if (!state.runKey || !allRuns().some((r) => r.id === state.runKey))
+      state.runKey = state.runs[0]?.id || "";
+    updateRunPickers();
+    await loadView();
+    connectEvents();
   } catch (e) {
-    $("#notice").textContent = `Could not load profile: ${e.message}`;
-    $("#notice").hidden = false;
-    $("#run-name").textContent = "Profile unavailable";
-    $("#run-state").textContent = "Load failed";
+    showError(e);
   }
 }
+function showError(e) {
+  $("#notice").textContent =
+    `Source update failed: ${e.message}. The last valid view is retained.`;
+  $("#notice").hidden = false;
+}
+async function loadView() {
+  if (!state.runKey) return;
+  const request = ++state.request;
+  try {
+    let data;
+    const local = state.imports.get(state.runKey);
+    state.imported = !!local;
+    if (local) {
+      data = localPage(local, {
+        task: state.task,
+        kind: state.kind,
+        q: state.query,
+        runtime: state.runtime,
+        offset: state.pageOffset,
+        limit: state.pageLimit,
+        start_ms: state.rangeStart,
+        end_ms: state.rangeEnd,
+      });
+    } else {
+      const params = new URLSearchParams({
+        run: state.runKey,
+        offset: state.pageOffset,
+        limit: state.pageLimit,
+        points: 300,
+      });
+      for (const [k, v] of Object.entries({
+        task: state.task,
+        kind: state.kind,
+        q: state.query,
+        runtime: state.runtime,
+        start_ms: state.rangeStart,
+        end_ms: state.rangeEnd,
+      }))
+        if (v != null && v !== "" && v !== "all") params.set(k, v);
+      data = await json("/api/view?" + params);
+    }
+    if (request !== state.request) return;
+    state.profile = data.profile;
+    state.runtimeIDs = data.runtime_ids || [
+      ...new Set(data.profile.resources.map((r) => r.runtime_id)),
+    ];
+    state.resourceError = data.resource_error || "";
+    state.resourceReturned = data.profile.resources.length;
+    state.resourceTotal = data.total_resources ?? data.profile.resources.length;
+    state.analysis = data.analysis || analyze(local || data.profile);
+    state.totalSpans = data.total_spans;
+    state.hiddenEdges = data.hidden_edges || 0;
+    state.revision = data.revision || state.revision;
+    if (state.pageOffset >= state.totalSpans && state.pageOffset > 0) {
+      state.pageOffset = Math.max(
+        0,
+        Math.floor((state.totalSpans - 1) / state.pageLimit) * state.pageLimit,
+      );
+      return loadView();
+    }
+    $("#notice").hidden = true;
+    render();
+    setLiveStatus();
+    if (state.selected) selectSpan(state.selected);
+  } catch (e) {
+    if (request === state.request) showError(e);
+  }
+}
+function setLiveStatus(label) {
+  const run = state.runs.find((r) => r.id === state.runKey);
+  $("#live-status").textContent =
+    label ||
+    (state.imported
+      ? "Local import"
+      : state.paused
+        ? "Updates paused"
+        : run?.last_error
+          ? "Source error"
+          : run?.live
+            ? `Watching · rev ${state.revision}`
+            : "Snapshot");
+  $("#pause-live").disabled = state.imported || !state.watchInterval;
+  $("#pause-live").textContent = state.paused ? "Resume live" : "Pause live";
+  $("#pause-live").setAttribute("aria-pressed", String(state.paused));
+}
+function connectEvents() {
+  if (state.stream || !state.watchInterval) return;
+  const stream = new EventSource("/api/events");
+  state.stream = stream;
+  stream.addEventListener("revision", async (event) => {
+    try {
+      const update = JSON.parse(event.data);
+      if (state.paused) return;
+      if (update.run_id === state.runKey) {
+        if (update.error) {
+          showError(Error(update.error));
+          setLiveStatus("Source error");
+        } else await loadView();
+      }
+      const data = await json("/api/runs");
+      state.runs = data.runs || state.runs;
+      updateRunPickers();
+      setLiveStatus();
+    } catch {
+      setLiveStatus("Reconnecting");
+    }
+  });
+  stream.onerror = () => setLiveStatus("Reconnecting");
+  stream.onopen = () => {
+    setLiveStatus();
+    // Reconcile after every subscription: notice history is deliberately bounded.
+    if (!state.paused) loadSource();
+  };
+}
 function render() {
-  const p = state.profile;
+  const p = state.profile,
+    a = state.analysis;
   $("#run-name").textContent = p.name || "Untitled workload";
   $("#run-id").textContent = short(p.run_id || "Imported profile", 65);
   const synthetic = (p.name + " " + p.run_id + " " + p.warnings.join(" "))
@@ -121,20 +317,24 @@ function render() {
     ? "Synthetic demo"
     : state.imported
       ? "Imported profile"
-      : "ARIES artifacts";
+      : "Recorded artifacts";
   $("#run-state").textContent = synthetic
     ? "Demo dataset"
-    : "Recorded evidence";
+    : state.runs.find((r) => r.id === state.runKey)?.live
+      ? "Live source"
+      : "Recorded evidence";
   $("#metric-duration").textContent = format(p.duration_ms);
-  const agentCount = new Set(p.spans.map((s) => s.agent_id).filter(Boolean))
-    .size;
-  $("#metric-agents").textContent = agentCount || "—";
-  $("#metric-spans").textContent = p.spans.length.toLocaleString();
+  $("#metric-agents").textContent = a.agent_count || "—";
+  $("#metric-spans").textContent = (
+    a.span_count ?? state.totalSpans
+  ).toLocaleString();
   $("#metric-span-note").textContent =
-    `Across ${p.tasks.length} task occurrence${p.tasks.length === 1 ? "" : "s"}`;
+    `Across ${p.tasks.length} task occurrences · full run`;
   const kindTime = (k) => {
-    const spans = p.spans.filter((s) => s.kind === k);
-    return spans.length ? format(union(spans)) : "—";
+    const item = a.kinds.find((x) => x.kind === k);
+    return item && item.time_quality !== "completion_only"
+      ? format(item.union_ms)
+      : "—";
   };
   $("#metric-active").textContent =
     `${kindTime("model")} / ${kindTime("tool")}`;
@@ -168,49 +368,53 @@ function render() {
   }
   const select = $("#kind-filter");
   select.replaceChildren(new Option("All span types", "all"));
-  for (const k of [...new Set(p.spans.map(kind))].sort())
+  for (const k of a.kinds.map((k) => k.kind).sort())
     select.add(new Option(k[0].toUpperCase() + k.slice(1), k));
   select.value = state.kind;
   const caps = $("#capability-list");
   caps.replaceChildren();
-  const mainCapabilities = p.capabilities.filter(
-    (c) => !c.name.startsWith("monitor/"),
-  );
-  for (const c of mainCapabilities.slice(0, 4)) {
-    const a = html(
+  for (const c of p.capabilities
+    .filter((c) => !c.name.startsWith("monitor/"))
+    .slice(0, 4)) {
+    const item = html(
       "div",
       `capability ${["unsupported", "not_enabled", "failed", "unavailable"].includes(c.status) ? "unavailable" : ""}`,
     );
-    a.append(html("span", "status-dot"), html("span", "", c.name));
-    a.title = `${c.status}${c.reason ? ": " + c.reason : ""}`;
-    caps.append(a);
+    item.append(html("span", "status-dot"), html("span", "", c.name));
+    item.title = `${c.status}${c.reason ? ": " + c.reason : ""}`;
+    caps.append(item);
   }
-  const runtime = $("#resource-filter");
-  runtime.replaceChildren(new Option("All runtimes", "all"));
-  const runtimeNames = new Map();
+  const runtime = $("#resource-filter"),
+    oldOptions = [...runtime.options].filter((o) => o.value !== "all");
+  const names = new Map(oldOptions.map((o) => [o.value, o.text]));
+  for (const id of state.runtimeIDs)
+    if (!names.has(id)) names.set(id, short(id, 30));
   for (const r of p.resources)
-    runtimeNames.set(
+    names.set(
       r.runtime_id || r.component,
-      r.component + (r.runtime_id ? " · " + short(r.runtime_id, 14) : ""),
+      r.component + (r.runtime_id ? " · " + short(r.runtime_id, 16) : ""),
     );
-  for (const [k, v] of runtimeNames) runtime.add(new Option(v, k));
+  runtime.replaceChildren(new Option("All runtimes", "all"));
+  for (const [k, v] of names) runtime.add(new Option(v, k));
   runtime.value = state.runtime;
+  $("#resource-message").hidden = !state.resourceError;
+  $("#resource-message").textContent = state.resourceError;
+  $(".resource-controls .tag").textContent =
+    `${state.resourceReturned.toLocaleString()} / ${state.resourceTotal.toLocaleString()} samples`;
   const cov = $("#coverage");
   cov.replaceChildren();
-  const intro = html("p");
-  intro.append(
-    html("strong", "", synthetic ? "Synthetic demo. " : "Evidence coverage. "),
-    document.createTextNode(
+  cov.append(
+    html(
+      "p",
+      "",
       synthetic
-        ? "These agents, dependencies, and measurements are generated to demonstrate the profiler."
-        : "Graph edges express recorded parent relationships. Timing overlap alone does not establish a dependency.",
+        ? "Synthetic demo. Agent relationships, timing, usage and resource signals are authored example data."
+        : "Evidence coverage. Relationships require explicit references; overlapping timing does not establish causality.",
     ),
   );
-  cov.append(intro);
-  for (const w of p.warnings) {
-    if (synthetic && String(w).toLowerCase().includes("synthetic")) continue;
-    cov.append(html("p", "", String(w)));
-  }
+  for (const w of p.warnings)
+    if (!synthetic || !w.toLowerCase().includes("synthetic"))
+      cov.append(html("p", "", w));
   if (p.capabilities.length) {
     const details = html("details", "coverage-details");
     details.append(
@@ -230,13 +434,272 @@ function render() {
       );
     cov.append(details);
   }
+  const b = bounds();
+  $("#range-start").value = Number((b.start / 1000).toFixed(3));
+  $("#range-end").value = Number((b.end / 1000).toFixed(3));
+  $("#page-label").textContent = state.totalSpans
+    ? `${state.pageOffset + 1}–${Math.min(state.pageOffset + state.pageLimit, state.totalSpans)} of ${state.totalSpans.toLocaleString()} matching spans`
+    : "No matching spans";
+  $("#edge-coverage").textContent = state.hiddenEdges
+    ? `${state.hiddenEdges} relationships cross this page; inspect a node to follow neighbors.`
+    : "All relationships between visible spans are shown.";
+  $("#page-prev").disabled = state.pageOffset === 0;
+  $("#page-next").disabled =
+    state.pageOffset + state.pageLimit >= state.totalSpans;
+  renderAnalysis();
   renderViews();
+}
+function renderAnalysis() {
+  const a = state.analysis,
+    p = state.profile;
+  const metrics = $("#analysis-metrics");
+  metrics.replaceChildren();
+  const done = a.task_succeeded + a.task_failed;
+  for (const [label, value, note] of [
+    [
+      "P50 / P95 TASK LATENCY",
+      done ? `${format(a.task_p50_ms)} / ${format(a.task_p95_ms)}` : "—",
+      "Completed task occurrences",
+    ],
+    ["PEAK WORK CONCURRENCY", a.max_concurrency, "Nested envelopes excluded"],
+    [
+      "THROUGHPUT",
+      `${a.throughput_per_second.toFixed(3)} / s`,
+      `${a.task_succeeded} succeeded · ${a.task_failed} failed`,
+    ],
+    [
+      "MODEL TOKENS",
+      `${a.usage.input_tokens?.toLocaleString() ?? "—"} / ${a.usage.output_tokens?.toLocaleString() ?? "—"}`,
+      `Input / output · ${a.usage.input_known}/${a.usage.model_calls} input usage known`,
+    ],
+  ]) {
+    const c = html("div");
+    c.append(
+      html("span", "metric-label", label),
+      html("strong", "", String(value)),
+      html("small", "", note),
+    );
+    metrics.append(c);
+  }
+  const breakdown = $("#kind-breakdown");
+  breakdown.replaceChildren();
+  for (const k of a.kinds) {
+    const row = html("div", "breakdown-row"),
+      title = html("div", "breakdown-title");
+    title.append(
+      html("span", "", `${k.kind} · ${k.count}`),
+      html(
+        "strong",
+        "",
+        k.time_quality === "completion_only"
+          ? "Timing unavailable"
+          : format(k.union_ms),
+      ),
+    );
+    const track = html("div", "breakdown-track"),
+      bar = html("i");
+    bar.style.width =
+      Math.min(100, p.duration_ms ? (k.union_ms / p.duration_ms) * 100 : 0) +
+      "%";
+    bar.style.background = colors[k.kind] || colors.other;
+    track.append(bar);
+    row.append(
+      title,
+      track,
+      html(
+        "small",
+        "",
+        `${format(k.summed_ms)} summed calls${k.incomplete_count ? " · " + k.incomplete_count + " incomplete or completion-only" : ""}`,
+      ),
+    );
+    breakdown.append(row);
+  }
+  const critical = a.critical_path;
+  $("#critical-duration").textContent =
+    critical.status === "available"
+      ? format(critical.duration_ms)
+      : "Unavailable";
+  $("#critical-reason").textContent = critical.reason || "";
+  $("#highlight-critical").disabled = critical.status !== "available";
+  const nodes = $("#critical-nodes");
+  nodes.replaceChildren();
+  for (const id of critical.span_ids || []) {
+    const button = html("button", "path-node", short(id, 32));
+    button.title = id;
+    button.onclick = () => jumpToSpan(id);
+    nodes.append(button);
+  }
+  const rows = p.tasks.map((t) => {
+    const c = a.coverage.find((c) => c.task_id === t.id);
+    return [
+      t.name || t.id,
+      t.status || "unknown",
+      t.evaluation_status || "unknown",
+      t.cleanup_status || "unknown",
+      format(t.duration_ms),
+      c && c.status !== "unavailable"
+        ? `${(c.ratio * 100).toFixed(1)}%`
+        : "Unavailable",
+      c && c.status !== "unavailable"
+        ? format(c.unattributed_ms)
+        : "Unavailable",
+    ];
+  });
+  table(
+    $("#coverage-table"),
+    [
+      "Task",
+      "Harness",
+      "Evaluation",
+      "Cleanup",
+      "Duration",
+      "Observed work",
+      "Unattributed",
+    ],
+    rows,
+  );
+}
+function table(target, headers, rows) {
+  const t = html("table");
+  const head = html("thead"),
+    tr = html("tr");
+  for (const h of headers) tr.append(html("th", "", h));
+  head.append(tr);
+  const body = html("tbody");
+  for (const row of rows) {
+    const tr = html("tr");
+    for (const cell of row) tr.append(html("td", "", String(cell)));
+    body.append(tr);
+  }
+  t.append(head, body);
+  target.replaceChildren(t);
+}
+async function compareRuns() {
+  const left = $("#compare-left").value,
+    right = $("#compare-right").value;
+  if (!left || !right) return;
+  try {
+    const get = async (id) => {
+      if (state.imports.has(id)) {
+        const p = state.imports.get(id);
+        return { profile: p, analysis: analyze(p) };
+      }
+      const metadata = allRuns().find((r) => r.id === id);
+      const analysis = await json(
+        "/api/analysis?run=" + encodeURIComponent(id),
+      );
+      return { profile: metadata, analysis: analysis.analysis || analysis };
+    };
+    const [l, r] = await Promise.all([get(left), get(right)]);
+    const configKeys = new Set([
+      ...Object.keys(l.profile.configuration || {}),
+      ...Object.keys(r.profile.configuration || {}),
+    ]);
+    const differences = [...configKeys].filter(
+      (k) =>
+        JSON.stringify(l.profile.configuration?.[k]) !==
+        JSON.stringify(r.profile.configuration?.[k]),
+    );
+    const items = [
+      ["Duration", l.profile.duration_ms, r.profile.duration_ms, format],
+      ["Task P50", l.analysis.task_p50_ms, r.analysis.task_p50_ms, format],
+      ["Task P95", l.analysis.task_p95_ms, r.analysis.task_p95_ms, format],
+      [
+        "Throughput / s",
+        l.analysis.throughput_per_second,
+        r.analysis.throughput_per_second,
+        (v) => v.toFixed(3),
+      ],
+      [
+        "Peak concurrency",
+        l.analysis.max_concurrency,
+        r.analysis.max_concurrency,
+        String,
+      ],
+      [
+        "Input tokens",
+        l.analysis.usage.input_tokens,
+        r.analysis.usage.input_tokens,
+        (v) => (v == null ? "Unavailable" : v.toLocaleString()),
+      ],
+      [
+        "Output tokens",
+        l.analysis.usage.output_tokens,
+        r.analysis.usage.output_tokens,
+        (v) => (v == null ? "Unavailable" : v.toLocaleString()),
+      ],
+    ];
+    const target = $("#comparison-result");
+    table(
+      target,
+      ["Metric", l.profile.name || left, r.profile.name || right, "Change"],
+      items.map(([name, a, b, format]) => [
+        name,
+        format(a),
+        format(b),
+        a == null || b == null
+          ? "Unavailable"
+          : a === 0
+            ? b === 0
+              ? "0%"
+              : "No zero baseline"
+            : `${b >= a ? "+" : ""}${(((b - a) / a) * 100).toFixed(1)}%`,
+      ]),
+    );
+    const note = html(
+      "p",
+      "comparison-note",
+      differences.length
+        ? "Experiment conditions differ: " +
+            differences.join(", ") +
+            ". Changes are descriptive, not a controlled causal comparison."
+        : configKeys.size
+          ? "Recorded configuration fields match. Unrecorded conditions and incomplete measurements still limit comparability."
+          : "Configuration metadata is unavailable. Experiment comparability is unknown.",
+    );
+    target.prepend(note);
+    if (configKeys.size) {
+      const section = html("div", "configuration-table");
+      table(
+        section,
+        ["Condition", "Baseline", "Candidate"],
+        [...configKeys].map((k) => [
+          k,
+          String(l.profile.configuration?.[k] ?? "Unknown"),
+          String(r.profile.configuration?.[k] ?? "Unknown"),
+        ]),
+      );
+      target.append(section);
+    }
+    const coverage = html("div", "comparison-coverage");
+    for (const [label, item] of [
+      ["Baseline", l],
+      ["Candidate", r],
+    ]) {
+      const known = item.analysis.coverage.filter(
+        (c) => c.status !== "unavailable",
+      );
+      const average = known.length
+        ? known.reduce((n, c) => n + c.ratio, 0) / known.length
+        : null;
+      coverage.append(
+        html(
+          "p",
+          "",
+          `${label}: ${known.length}/${item.analysis.coverage.length} tasks have usable timing; mean observed-work coverage ${average == null ? "unavailable" : (average * 100).toFixed(1) + "%"}; token input known for ${item.analysis.usage.input_known}/${item.analysis.usage.model_calls} model records.`,
+        ),
+      );
+    }
+    target.append(coverage);
+  } catch (e) {
+    notify("Comparison failed: " + e.message);
+  }
 }
 function setTask(id) {
   state.task = id;
-  state.selected = null;
+  state.pageOffset = 0;
   closeInspector();
-  render();
+  loadView();
 }
 function renderViews() {
   if (!state.profile) return;
@@ -262,14 +725,14 @@ function drawDAG(spans) {
     svg.setAttribute("height", "0");
     return;
   }
-  const displayed = spans.slice(0, 350),
+  const displayed = spans,
     ids = new Set(displayed.map((s) => s.id));
   const es = edges().filter((e) => ids.has(e.source) && ids.has(e.target));
   $("#dag-note").textContent =
-    spans.length > 350
-      ? "Showing first 350 nodes; filter to explore"
+    state.hiddenEdges > 0
+      ? `${es.length} visible edges · ${state.hiddenEdges} cross this page`
       : es.length
-        ? `${es.length} explicit relationship${es.length === 1 ? "" : "s"}`
+        ? `${es.length} recorded relationship${es.length === 1 ? "" : "s"}`
         : "No recorded dependencies · isolated spans";
   const parents = new Map(),
     adj = new Map(),
@@ -341,22 +804,22 @@ function drawDAG(spans) {
       sy = a.y + 34,
       tx = b.x,
       ty = b.y + 34;
-    svg.append(
-      node("path", {
-        d: `M${sx},${sy} C${sx + 20},${sy} ${tx - 20},${ty} ${tx - 6},${ty}`,
-        class: `dag-edge ${state.selected === e.source || state.selected === e.target ? "focused" : ""}`,
-        "marker-end": "url(#arrow)",
-      }),
-    );
+    const edgePath = node("path", {
+      d: `M${sx},${sy} C${sx + 20},${sy} ${tx - 20},${ty} ${tx - 6},${ty}`,
+      class: `dag-edge edge-${e.kind} ${state.selected === e.source || state.selected === e.target ? "focused" : ""} ${state.critical && state.analysis.critical_path.span_ids.includes(e.source) && state.analysis.critical_path.span_ids.includes(e.target) ? "critical" : ""}`,
+      "marker-end": "url(#arrow)",
+    });
+    edgePath.append(node("title", {}, `${e.kind}: ${e.source} → ${e.target}`));
+    svg.append(edgePath);
   }
   for (const s of displayed) {
     const { x, y } = pos.get(s.id);
     const g = node("g", {
-      class: `dag-node ${s.status === "failed" || s.status === "ERROR" ? "failed" : ""} ${state.selected === s.id ? "selected" : ""}`,
+      class: `dag-node ${s.status === "failed" || s.status === "ERROR" ? "failed" : ""} ${state.selected === s.id ? "selected" : ""} ${state.critical && state.analysis.critical_path.span_ids.includes(s.id) ? "critical" : ""}`,
       transform: `translate(${x},${y})`,
       tabindex: 0,
       role: "button",
-      "aria-label": `${s.agent_id || "Agent"}: ${s.name}, ${format(s.duration_ms)}`,
+      "aria-label": `${s.agent_id || "Agent"}: ${s.name}, ${spanDuration(s)}`,
     });
     g.append(
       node("rect", { width: 190, height: 70, rx: 7 }),
@@ -382,12 +845,12 @@ function drawDAG(spans) {
       node(
         "text",
         { x: 178, y: 55, class: "node-duration", "text-anchor": "end" },
-        format(s.duration_ms),
+        spanDuration(s),
       ),
       node(
         "title",
         {},
-        `${s.name}\n${s.agent_id || s.task_id || ""}\n${format(s.duration_ms)} · ${s.status || "unknown"}`,
+        `${s.name}\n${s.agent_id || s.task_id || ""}\n${spanDuration(s)} · ${s.status || "unknown"}`,
       ),
     );
     g.onclick = () => selectSpan(s.id);
@@ -400,16 +863,6 @@ function drawDAG(spans) {
     svg.append(g);
   }
 }
-function timeBounds() {
-  const p = state.profile;
-  return Math.max(
-    p.duration_ms,
-    maximum(p.spans.map((s) => s.start_ms + s.duration_ms)),
-    maximum(p.tasks.map((t) => t.start_ms + t.duration_ms)),
-    maximum(p.resources.map((r) => r.time_ms)),
-    1,
-  );
-}
 function drawTimeline(spans) {
   const svg = $("#timeline");
   svg.replaceChildren();
@@ -419,10 +872,10 @@ function drawTimeline(spans) {
       $("#timeline-scroll").clientWidth - labelWidth - 25,
     ),
     plotWidth = baseWidth * state.zoom,
-    total = timeBounds();
+    total = bounds().duration;
   const width = labelWidth + plotWidth + 25;
   const lanes = new Map();
-  for (const s of spans.slice(0, 2500)) {
+  for (const s of spans) {
     const key = `${s.task_id || "run"}\0${s.agent_id || "unassigned"}`;
     if (!lanes.has(key))
       lanes.set(key, {
@@ -470,7 +923,7 @@ function drawTimeline(spans) {
           "text-anchor": i === 0 ? "start" : "middle",
           class: "timeline-label",
         },
-        format(t),
+        format(t + bounds().start),
       ),
     );
   }
@@ -503,8 +956,14 @@ function drawTimeline(spans) {
     );
   }
   for (const { s, y } of rows) {
-    const x = labelWidth + (s.start_ms / total) * plotWidth,
-      w = Math.max(3, (s.duration_ms / total) * plotWidth);
+    const clippedStart = Math.max(s.start_ms, bounds().start),
+      clippedEnd = Math.min(s.start_ms + s.duration_ms, bounds().end);
+    const x =
+        labelWidth + ((clippedStart - bounds().start) / total) * plotWidth,
+      w = Math.max(
+        3,
+        (Math.max(0, clippedEnd - clippedStart) / total) * plotWidth,
+      );
     const bar = node("rect", {
       x,
       y,
@@ -512,7 +971,7 @@ function drawTimeline(spans) {
       height: 20,
       rx: 3,
       fill: color(s),
-      class: `timeline-bar ${s.status === "failed" || s.status === "ERROR" ? "failed" : ""} ${state.selected === s.id ? "selected" : ""}`,
+      class: `timeline-bar ${s.incomplete ? "incomplete" : ""} ${s.status === "failed" || s.status === "ERROR" ? "failed" : ""} ${state.selected === s.id ? "selected" : ""} ${state.critical && state.analysis.critical_path.span_ids.includes(s.id) ? "critical" : ""}`,
       tabindex: 0,
       role: "button",
       "aria-label": `${s.name}, ${format(s.start_ms)} to ${format(s.start_ms + s.duration_ms)}`,
@@ -521,7 +980,7 @@ function drawTimeline(spans) {
       node(
         "title",
         {},
-        `${s.name}\n${format(s.start_ms)} → ${format(s.start_ms + s.duration_ms)}\nDuration: ${format(s.duration_ms)}`,
+        `${s.name}\n${format(s.start_ms)} → ${format(s.start_ms + s.duration_ms)}\nDuration: ${spanDuration(s)}`,
       ),
     );
     bar.onclick = () => selectSpan(s.id);
@@ -549,11 +1008,58 @@ function drawTimeline(spans) {
         "No matching execution spans.",
       ),
     );
+  svg.onpointerdown = (event) => {
+    if (event.target.closest(".timeline-bar")) return;
+    const rect = svg.getBoundingClientRect();
+    const px = event.clientX - rect.left;
+    if (px < labelWidth) return;
+    const initial = Math.max(0, Math.min(plotWidth, px - labelWidth));
+    const overlay = node("rect", {
+      x: initial + labelWidth,
+      y: 27,
+      width: 1,
+      height: height - 27,
+      fill: "#258b7d20",
+      stroke: "#258b7d",
+      "pointer-events": "none",
+    });
+    svg.append(overlay);
+    svg.setPointerCapture(event.pointerId);
+    svg.onpointermove = (move) => {
+      const next = Math.max(
+        0,
+        Math.min(plotWidth, move.clientX - rect.left - labelWidth),
+      );
+      overlay.setAttribute("x", Math.min(initial, next) + labelWidth);
+      overlay.setAttribute("width", Math.abs(next - initial));
+    };
+    svg.onpointerup = (up) => {
+      const next = Math.max(
+        0,
+        Math.min(plotWidth, up.clientX - rect.left - labelWidth),
+      );
+      overlay.remove();
+      svg.onpointermove = null;
+      svg.onpointerup = null;
+      if (svg.hasPointerCapture(up.pointerId))
+        svg.releasePointerCapture(up.pointerId);
+      if (Math.abs(next - initial) > 8)
+        applyRange(
+          bounds().start + (Math.min(initial, next) / plotWidth) * total,
+          bounds().start + (Math.max(initial, next) / plotWidth) * total,
+        );
+    };
+    svg.onpointercancel = () => {
+      overlay.remove();
+      svg.onpointermove = null;
+      svg.onpointerup = null;
+    };
+  };
   $("#time-window").textContent =
-    `0 → ${format(total)}${spans.length > 2500 ? " · first 2,500 spans; filter to explore" : ""}`;
+    `${format(bounds().start)} → ${format(bounds().end)} · ${state.totalSpans} matching spans`;
 }
 function drawResources() {
-  const total = timeBounds();
+  const total = bounds().duration;
   const selected = state.profile.resources.filter(
     (r) =>
       (state.task === "all" || r.task_id === state.task || !r.task_id) &&
@@ -562,6 +1068,11 @@ function drawResources() {
   );
   drawChart($("#cpu-chart"), selected, "cpu_percent", total, "#438f7c");
   drawChart($("#memory-chart"), selected, "memory_bytes", total, "#8b91c6");
+  drawChart($("#gpu-chart"), selected, "gpu_percent", total, "#bd9860");
+  const gpu = selected.map((r) => r.gpu_percent).filter(Number.isFinite);
+  $("#gpu-peak").textContent = gpu.length
+    ? `${maximum(gpu).toFixed(1)}% peak`
+    : "Not measured";
   const cpu = selected.map((r) => r.cpu_percent).filter(Number.isFinite),
     mem = selected.map((r) => r.memory_bytes).filter(Number.isFinite);
   $("#cpu-peak").textContent = cpu.length
@@ -594,7 +1105,7 @@ function drawChart(svg, samples, key, total, tint) {
   const max =
     Math.max(
       maximum(valid.map((r) => r[key])),
-      key === "cpu_percent" ? 1 : 1048576,
+      key.endsWith("percent") ? 1 : 1048576,
     ) * 1.15;
   for (let i = 0; i <= 2; i++) {
     const value = (max * i) / 2,
@@ -611,7 +1122,7 @@ function drawChart(svg, samples, key, total, tint) {
       node(
         "text",
         { x: left - 6, y: y + 3, "text-anchor": "end", class: "chart-axis" },
-        key === "cpu_percent"
+        key.endsWith("percent")
           ? value.toFixed(0) + "%"
           : (value / 1048576).toFixed(0) + "M",
       ),
@@ -627,7 +1138,7 @@ function drawChart(svg, samples, key, total, tint) {
           "text-anchor": "middle",
           class: "chart-axis",
         },
-        format((total * i) / 4),
+        format(bounds().start + (total * i) / 4),
       ),
     );
   const series = new Map();
@@ -655,7 +1166,8 @@ function drawChart(svg, samples, key, total, tint) {
         drawing = false;
         continue;
       }
-      const x = left + (r.time_ms / total) * (w - left - right),
+      const x =
+          left + ((r.time_ms - bounds().start) / total) * (w - left - right),
         y = h - bottom - (r[key] / max) * (h - bottom - top);
       path += `${drawing && r.time_ms - prev <= interval * 2.5 ? "L" : "M"}${x.toFixed(2)},${y.toFixed(2)} `;
       drawing = true;
@@ -673,7 +1185,9 @@ function drawChart(svg, samples, key, total, tint) {
     if (rs.length === 1 && Number.isFinite(rs[0][key]))
       svg.append(
         node("circle", {
-          cx: left + (rs[0].time_ms / total) * (w - left - right),
+          cx:
+            left +
+            ((rs[0].time_ms - bounds().start) / total) * (w - left - right),
           cy: h - bottom - (rs[0][key] / max) * (h - bottom - top),
           r: 2,
           fill: tint,
@@ -681,8 +1195,28 @@ function drawChart(svg, samples, key, total, tint) {
       );
   }
 }
-function selectSpan(id) {
-  const s = state.profile.spans.find((s) => s.id === id);
+async function selectSpan(id) {
+  let s = state.profile.spans.find((s) => s.id === id),
+    related = [],
+    stats;
+  try {
+    if (state.imported) {
+      const p = state.imports.get(state.runKey);
+      s = p.spans.find((s) => s.id === id);
+      related = p.edges.filter((e) => e.source === id || e.target === id);
+      stats = windowStats(p, id);
+    } else {
+      const result = await json(
+        "/api/span?" + new URLSearchParams({ run: state.runKey, id }),
+      );
+      s = result.span;
+      related = result.edges || [];
+      stats = result.resource_stats || result.window_stats;
+    }
+  } catch (e) {
+    notify("Span details unavailable: " + e.message);
+    return;
+  }
   if (!s) return;
   state.selected = id;
   $("#inspector").hidden = false;
@@ -692,59 +1226,142 @@ function selectSpan(id) {
   const k = html("div", "detail-kind", kind(s));
   k.style.color = color(s);
   content.append(k, html("h2", "detail-title", s.name));
-  const metric = html("div", "detail-metric", format(s.duration_ms));
-  metric.append(html("small", "", "duration"));
+  const durationUnknown =
+    s.incomplete ||
+    ["completion_only", "unknown"].includes(s.attributes?.time_quality);
+  const metric = html(
+    "div",
+    "detail-metric",
+    durationUnknown ? "Unavailable" : format(s.duration_ms),
+  );
+  metric.append(html("small", "", s.incomplete ? "in progress" : "duration"));
   content.append(metric);
   const dl = html("dl");
   const task = state.profile.tasks.find((t) => t.id === s.task_id);
   for (const [a, b] of [
-    ["Agent", s.agent_id || "Unknown"],
+    ["Agent", s.agent_id || "Not recorded"],
     ["Task", s.task_id || "Run scope"],
     ["Status", s.status || "Unknown"],
+    ["Time quality", s.attributes?.time_quality || "Recorded interval"],
     ["Start", format(s.start_ms)],
-    ["End", format(s.start_ms + s.duration_ms)],
+    [
+      "End",
+      s.incomplete ? "Not yet recorded" : format(s.start_ms + s.duration_ms),
+    ],
     ["Source", s.source || "Unspecified"],
     ["Span ID", s.id],
-    ["Parent", s.parent_id || "No recorded parent"],
+    ["Runtime", s.runtime_id || "Not recorded"],
     ...(task
       ? [
           ["Evaluation", task.evaluation_status || "Unknown"],
           ["Cleanup", task.cleanup_status || "Unknown"],
         ]
       : []),
+    ...(s.usage
+      ? [
+          ["Input tokens", s.usage.input_tokens ?? "Unavailable"],
+          ["Output tokens", s.usage.output_tokens ?? "Unavailable"],
+        ]
+      : []),
   ]) {
     const row = html("div", "detail-row");
-    row.append(html("dt", "", a), html("dd", "", b));
+    row.append(html("dt", "", a), html("dd", "", String(b)));
     dl.append(row);
   }
   content.append(dl);
-  if (s.attributes && Object.keys(s.attributes).length) {
-    const title = html("p", "detail-note", "Recorded attributes");
-    content.append(title);
-    for (const [a, b] of Object.entries(s.attributes)) {
-      const row = html("div", "detail-row");
-      row.append(
-        html("dt", "", a),
-        html("dd", "", typeof b === "object" ? JSON.stringify(b) : String(b)),
+  if (related.length) {
+    content.append(
+      html("h3", "detail-section-title", "Recorded relationships"),
+    );
+    for (const e of related) {
+      const neighbor = e.source === id ? e.target : e.source;
+      const button = html(
+        "button",
+        "relationship-link",
+        `${e.source === id ? "→" : "←"} ${e.kind} · ${short(neighbor, 36)}`,
       );
-      content.append(row);
+      button.title = neighbor;
+      button.onclick = () => jumpToSpan(neighbor);
+      content.append(button);
     }
   }
+  content.append(
+    html("h3", "detail-section-title", "Resources during this interval"),
+  );
+  if (!stats?.resources?.length)
+    content.append(
+      html("p", "detail-note", "No samples recorded within this interval."),
+    );
+  else
+    for (const r of stats.resources) {
+      const card = html("div", "window-resource");
+      card.append(
+        html("strong", "", `${r.component} · ${short(r.runtime_id, 24)}`),
+        html(
+          "small",
+          "",
+          `${r.attribution.replaceAll("_", " ")} · ${r.sample_count} samples`,
+        ),
+      );
+      for (const [key, label, fmt] of [
+        ["cpu_percent", "CPU", (v) => v.toFixed(1) + "%"],
+        ["memory_bytes", "Memory", bytes],
+        ["gpu_percent", "GPU", (v) => v.toFixed(1) + "%"],
+      ]) {
+        const m = r[key];
+        if (m?.sample_count)
+          card.append(
+            html(
+              "p",
+              "",
+              `${label}: ${fmt(m.min)} – ${fmt(m.max)} · mean ${fmt(m.mean)}`,
+            ),
+          );
+      }
+      content.append(card);
+    }
   content.append(
     html(
       "p",
       "detail-note",
-      "DAG relationships come from explicit span references. Concurrent execution does not imply causality.",
+      "Sample statistics describe concurrent runtime or task context, not resource cost caused by this span. Shared/device samples remain separate.",
     ),
   );
-  const focus = html("button", "button detail-button", "Focus this agent");
+  if (s.attributes && Object.keys(s.attributes).length) {
+    const details = html("details", "detail-attributes");
+    details.append(html("summary", "", "Recorded metadata"));
+    for (const [a, b] of Object.entries(s.attributes)) {
+      const row = html("div", "detail-row");
+      row.append(html("dt", "", a), html("dd", "", String(b)));
+      details.append(row);
+    }
+    content.append(details);
+  }
+  const focus = html(
+    "button",
+    "button detail-button",
+    "Focus this time interval",
+  );
+  focus.disabled = durationUnknown;
   focus.onclick = () => {
-    state.query = (s.agent_id || s.name).toLowerCase();
-    $("#search").value = s.agent_id || s.name;
-    renderViews();
+    state.rangeStart = s.start_ms;
+    state.rangeEnd = s.start_ms + s.duration_ms;
+    state.pageOffset = 0;
+    loadView();
   };
   content.append(focus);
   requestAnimationFrame(renderViews);
+}
+async function jumpToSpan(id) {
+  state.task = "all";
+  state.kind = "all";
+  state.query = id.toLowerCase();
+  $("#search").value = id;
+  state.pageOffset = 0;
+  state.rangeStart = 0;
+  state.rangeEnd = null;
+  await loadView();
+  selectSpan(id);
 }
 function closeInspector() {
   state.selected = null;
@@ -752,22 +1369,50 @@ function closeInspector() {
   document.body.classList.remove("inspecting");
   if (state.profile) requestAnimationFrame(renderViews);
 }
+function applyRange(start, end) {
+  if (
+    !Number.isFinite(start) ||
+    !Number.isFinite(end) ||
+    start < 0 ||
+    end <= start
+  ) {
+    notify("Choose a non-negative time window with end after start.");
+    return;
+  }
+  state.rangeStart = start;
+  state.rangeEnd = end;
+  state.pageOffset = 0;
+  state.zoom = 1;
+  $("#zoom").value = 1;
+  loadView();
+}
 for (const b of document.querySelectorAll("[data-view]"))
   b.onclick = () => {
     state.view = b.dataset.view;
     renderViews();
   };
+$("#run-picker").onchange = async (e) => {
+  state.runKey = e.target.value;
+  resetFilters();
+  $("#resource-filter").replaceChildren(new Option("All runtimes", "all"));
+  updateRunPickers();
+  await loadView();
+};
+$("#run-picker-mobile").onchange = $("#run-picker").onchange;
 $("#search").oninput = (e) => {
   state.query = e.target.value.trim().toLowerCase();
-  renderViews();
+  state.pageOffset = 0;
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(loadView, 160);
 };
 $("#kind-filter").onchange = (e) => {
   state.kind = e.target.value;
-  renderViews();
+  state.pageOffset = 0;
+  loadView();
 };
 $("#resource-filter").onchange = (e) => {
   state.runtime = e.target.value;
-  drawResources();
+  loadView();
 };
 $("#zoom").oninput = (e) => {
   state.zoom = Number(e.target.value);
@@ -779,11 +1424,41 @@ $("#reset-time").onclick = () => {
   $("#timeline-scroll").scrollLeft = 0;
   renderViews();
 };
+$("#apply-range").onclick = () =>
+  applyRange(
+    Number($("#range-start").value) * 1000,
+    Number($("#range-end").value) * 1000,
+  );
+$("#full-range").onclick = () => {
+  state.rangeStart = 0;
+  state.rangeEnd = null;
+  state.pageOffset = 0;
+  loadView();
+};
+$("#page-prev").onclick = () => {
+  state.pageOffset = Math.max(0, state.pageOffset - state.pageLimit);
+  loadView();
+};
+$("#page-next").onclick = () => {
+  state.pageOffset += state.pageLimit;
+  loadView();
+};
+$("#page-size").onchange = (e) => {
+  state.pageLimit = Number(e.target.value);
+  state.pageOffset = 0;
+  loadView();
+};
+$("#highlight-critical").onclick = () => {
+  state.critical = !state.critical;
+  $("#highlight-critical").setAttribute("aria-pressed", String(state.critical));
+  renderViews();
+};
+$("#compare-button").onclick = compareRuns;
 $("#fit-graph").onclick = () => {
   const svg = $("#dag"),
     w = svg.viewBox.baseVal.width,
-    h = svg.viewBox.baseVal.height;
-  const viewport = $("#dag-scroll");
+    h = svg.viewBox.baseVal.height,
+    viewport = $("#dag-scroll");
   const scale = Math.min(
     1,
     viewport.clientWidth / w,
@@ -795,43 +1470,61 @@ $("#fit-graph").onclick = () => {
 };
 $("#overview").onclick = () => {
   if (!state.profile) return;
-  state.task = "all";
-  state.query = "";
-  state.kind = "all";
-  $("#search").value = "";
-  closeInspector();
-  render();
+  resetFilters();
+  loadView();
 };
 $("#close-inspector").onclick = closeInspector;
 $("#load-source").onclick = loadSource;
+$("#pause-live").onclick = () => {
+  state.paused = !state.paused;
+  setLiveStatus();
+  if (!state.paused) loadSource();
+};
 $("#import-button").onclick = () => $("#import-file").click();
 $("#import-file").onchange = async (e) => {
   const file = e.target.files[0];
   if (!file) return;
   try {
     if (file.size > 32 * 1024 * 1024)
-      throw Error("Profile file exceeds 32 MiB.");
-    setProfile(JSON.parse(await file.text()), true);
-    notify("Profile imported locally.");
+      throw Error(
+        "Profile exceeds browser import limit of 32 MiB. Use --run for a larger source.",
+      );
+    const p = validate(JSON.parse(await file.text()));
+    const id = "import-" + Date.now();
+    state.imports.set(id, p);
+    state.runKey = id;
+    resetFilters();
+    updateRunPickers();
+    await loadView();
+    notify("Profile imported locally and available for comparison.");
   } catch (err) {
-    notify(`Import failed: ${err.message}`);
+    notify("Import failed: " + err.message);
   } finally {
     e.target.value = "";
   }
 };
-$("#export-button").onclick = () => {
+$("#export-button").onclick = async () => {
   if (!state.profile) return;
-  const url = URL.createObjectURL(
-    new Blob([JSON.stringify(state.profile, null, 2) + "\n"], {
-      type: "application/json",
-    }),
-  );
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "tracex-profile.json";
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-  notify("Normalized profile exported.");
+  try {
+    const p =
+      state.imports.get(state.runKey) ||
+      (await json("/api/profile?run=" + encodeURIComponent(state.runKey)));
+    const url = URL.createObjectURL(
+        new Blob([JSON.stringify(p, null, 2) + "\n"], {
+          type: "application/json",
+        }),
+      ),
+      link = document.createElement("a");
+    link.href = url;
+    link.download = "tracex-profile.json";
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    notify(
+      "Complete profile exported, including spans outside the current page.",
+    );
+  } catch (e) {
+    notify("Export failed: " + e.message);
+  }
 };
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeInspector();
@@ -848,4 +1541,5 @@ window.addEventListener("resize", () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(renderViews, 150);
 });
+window.addEventListener("beforeunload", () => state.stream?.close());
 loadSource();

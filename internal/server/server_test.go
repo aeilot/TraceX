@@ -26,7 +26,7 @@ func TestRoutes(t *testing.T) {
 		{"/styles.css", 200, "text/css"},
 		{"/api/profile", 200, "application/json"},
 		{"/api/health", 200, "application/json"},
-		{"/api/missing", 404, "text/plain"},
+		{"/api/missing", 404, "application/json"},
 		{"/runs/private.log", 404, "text/plain"},
 		{"/../go.mod", 404, "text/plain"},
 	} {

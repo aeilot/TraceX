@@ -1,18 +1,55 @@
 # Verification
 
-The initial implementation was verified on macOS with Go 1.26.4 and Node.js 22.21.1.
+The P0–P2 implementation was verified locally on macOS/Apple M4 using Go 1.26.4 for TraceX, Go 1.26.5 for the ARIES producer, and Node.js 22.21.1. Local checks are recorded here; this does not assert that remote CI has completed.
 
-- `make check`: Go tests, Node model/validation tests, JavaScript syntax, Go race tests, vet, and binary build passed.
-- Browser checks: DAG/timeline/split switching, agent search, type and task filters, details opening and Escape dismissal, timeline zoom/reset, cycle rejection on import, valid custom-profile import, export download, source reset, and a 390-pixel viewport without page overflow passed. No browser console errors were observed.
-- An existing Hermes ARIES run loaded two task occurrences, 193 spans, 28 explicit parent edges, and 345 resource samples. Task filtering was verified in the UI. An absent agent identity displayed as unavailable, while later measured zero CPU samples remained zero.
-- An existing OpenClaw ARIES run loaded one task occurrence, 81 bridge spans and 317 resource samples. No parent edges were fabricated. The unsupported native trajectory adapter was reported explicitly.
+## TraceX checks
 
-The real run artifacts used for these checks are private and are not included in this repository. The screenshot in the README contains only the built-in synthetic demo.
+`make check` covers Go unit tests, JavaScript syntax and 19 model/analysis tests, Go race tests, vet, and a binary build. Coverage includes schema v1 migration, v2 multi-parent joins and whole-graph cycles, explicit precedence critical paths, unknown timing, nested concurrency, interval unions, usage coverage/zero values, private-field filtering, resource context, overlapping range queries, stable filtered pages, forward references, SSE replay/cancellation, partial lines, malformed snapshots, truncation/rotation, and native incremental decoding.
 
-To repeat the automated checks:
+Browser verification covered:
+
+- DAG/timeline/split views, three-way joins, critical-path highlighting and navigation.
+- Model usage and interval resource statistics in the inspector.
+- Linked range selection, agent/type filters, page navigation and page-size changes.
+- Baseline/candidate comparison with configuration warnings and computed changes.
+- A 630-span imported profile: off-page spans remained searchable and full export contained all 630.
+- Cycle rejection preserved the active profile.
+- A 390-pixel viewport had no page overflow and could switch runs.
+- Synthetic live events updated via SSE; pause/resume, last-valid retention after malformed append, and file-replacement recovery were exercised.
+
+No browser page errors were observed in the main smoke test. The repeatable script is [scripts/browser-smoke.cjs](../scripts/browser-smoke.cjs); it expects the default two-demo workspace and a Playwright installation. The runtime app itself does not require Playwright or Node.
 
 ```sh
-make check
+# With Playwright available in Node's module resolution:
+make run
+node scripts/browser-smoke.cjs
+# Override TRACEX_URL when the demo server uses another address.
 ```
 
-Manual browser check: run `make run`, switch all three layouts, select nodes/bars, search an agent, change the span-type filter, zoom/reset, then import an invalid cyclic profile and confirm it leaves the active dataset unchanged. Start with `--run PATH` to verify your own backend evidence. The app is a fixed offline snapshot; refresh of a running experiment is not implemented.
+## Native evidence checks
+
+Private retained data was read locally without printing message bodies or publishing artifacts:
+
+| Source | Tasks | Spans | Resource samples | Observation |
+| --- | ---: | ---: | ---: | --- |
+| OpenClaw terminal task | 1 | 84 | 317 | Session + model completion usage + bridge + task lifecycle; unknown model duration stayed unavailable |
+| Hermes BrowserBench sweep | 8 | 33,524 | 8,297 | Includes 31,313 network records; browser verified network pages 1–250 and 251–500 |
+
+These counts describe retained artifact coverage, not benchmark accuracy or complete instrumentation. Real artifacts are not committed. Screenshots contain only synthetic demos.
+
+## Scale checks
+
+A synthetic server fixture contains 50,000 spans and 200,000 samples. Tests verify bounded pages, range indexes, resource peak/gap preservation, and incremental updates. A separate 45-runtime case verifies that a resource-budget warning does not block span browsing and that selecting one runtime restores its curve.
+
+Indicative Apple M4 Go benchmark, three iterations (not a latency guarantee): indexed narrow `/api/view` about 1.0 ms/op; complete snapshot/index rebuild about 24.9 ms/op. Derived analysis still processes retained data; incremental file reads do not promise constant-time snapshot rebuilding.
+
+```sh
+go test ./internal/server -run TestLargeIndexedViewAndStreamUpdate
+go test ./internal/server -run '^$' -bench 'LargeIndexedView|LargeSnapshotBuild' -benchtime=3x
+```
+
+## ARIES producer checks
+
+Using ARIES's declared Go 1.26.5 toolchain, Runner/core unit tests, Runner race checks, and the changed scheduling/artifact/snapshot app-file tests and race checks passed. The entire app test package cross-compiled for Linux.
+
+The complete ARIES app test package cannot build natively on this macOS host because existing SGLang process code uses Linux-only `unix.Waitid`, `P_PID`, and `Siginfo` without a Darwin implementation. This pre-existing issue was not changed as part of profiler instrumentation. No paid model runs or new benchmark containers were started for this work.

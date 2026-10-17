@@ -8,7 +8,7 @@ test:
 	go test ./...
 test-web:
 	node --check web/app.js
-	node --test web/profile.test.cjs
+	node --test web/*.test.cjs
 test-race:
 	go test -race ./...
 vet:

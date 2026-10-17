@@ -1,7 +1,6 @@
 package profile
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -56,13 +55,25 @@ func decode(b []byte, v any) error {
 
 // Load reads a normalized TraceX JSON file or an ARIES run directory. It never
 // executes evidence or exposes raw command, prompt, response, or environment data.
-func Load(path string) (Profile, error) {
+func Load(path string) (Profile, error) { return load(path, nil) }
+func load(path string, cache *recordCache) (Profile, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
 		return Profile{}, err
 	}
 	if info.IsDir() {
-		return loadARIES(path)
+		return loadARIES(path, cache)
+	}
+	if filepath.Ext(path) == ".jsonl" {
+		if !info.Mode().IsRegular() {
+			return Profile{}, fmt.Errorf("event input must be a regular file")
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			return Profile{}, err
+		}
+		defer f.Close()
+		return ApplyEvents(empty(), f)
 	}
 	b, err := readBounded(path)
 	if err != nil {
@@ -79,11 +90,12 @@ func Load(path string) (Profile, error) {
 }
 
 type nativeTask struct {
-	TaskID    string    `json:"task_id"`
-	StartedAt time.Time `json:"started_at"`
-	Duration  int64     `json:"duration"`
-	Error     string    `json:"error"`
-	Harness   struct {
+	TaskID      string    `json:"task_id"`
+	StartedAt   time.Time `json:"started_at"`
+	ScheduledAt time.Time `json:"scheduled_at"`
+	Duration    int64     `json:"duration"`
+	Error       string    `json:"error"`
+	Harness     struct {
 		Status string `json:"status"`
 	} `json:"harness"`
 	Evaluation struct {
@@ -105,25 +117,77 @@ type timedSpan struct {
 	start                   int64
 	end                     int64
 	rawID, rawParent, trace string
+	dependency              string
 }
 type timedResource struct {
 	r  Resource
 	at int64
 }
 
-func loadARIES(root string) (Profile, error) {
-	b, err := readBounded(filepath.Join(root, "run-result.json"))
-	if err != nil {
-		return Profile{}, fmt.Errorf("read ARIES run-result.json: %w", err)
+func loadARIES(root string, cache *recordCache) (Profile, error) {
+	readRecords := streamRecords
+	if cache != nil {
+		readRecords = cache.read
 	}
+	b, err := readBounded(filepath.Join(root, "run-result.json"))
 	var run nativeRun
-	if err := decode(b, &run); err != nil {
+	live := false
+	if errors.Is(err, os.ErrNotExist) {
+		live = true
+		entries, e := os.ReadDir(root)
+		if e != nil {
+			return Profile{}, e
+		}
+		ids := map[string]bool{}
+		for _, d := range entries {
+			if !d.IsDir() || d.Name() == "infrastructure" || strings.HasPrefix(d.Name(), ".") {
+				continue
+			}
+			for _, component := range []string{"harness", "bridge", "monitor", "evaluation", "evaluation-sandbox"} {
+				info, e := os.Lstat(filepath.Join(root, d.Name(), component))
+				if e == nil && info.IsDir() {
+					ids[d.Name()] = true
+					break
+				}
+			}
+		}
+		// Task identity in lifecycle logs is evidence even before an artifact
+		// directory exists. Do not infer final outcomes from log text.
+		if _, _, e := readRecords(filepath.Join(root, "aries.log"), func(v map[string]any, _ int) {
+			switch text(v["msg"]) {
+			case "task started", "task finished", "task phase":
+			default:
+				return
+			}
+			id := text(v["task_id"])
+			if id != "" && id != "." && id != ".." && filepath.Base(id) == id && !strings.ContainsAny(id, "/\\") {
+				ids[id] = true
+			}
+		}); e != nil && !errors.Is(e, os.ErrNotExist) {
+			return Profile{}, e
+		}
+		names := make([]string, 0, len(ids))
+		for id := range ids {
+			names = append(names, id)
+		}
+		sort.Strings(names)
+		for _, id := range names {
+			run.Tasks = append(run.Tasks, nativeTask{TaskID: id})
+		}
+
+	} else if err != nil {
+		return Profile{}, fmt.Errorf("read ARIES run-result.json: %w", err)
+	} else if err = decode(b, &run); err != nil {
 		return Profile{}, fmt.Errorf("decode ARIES result: %w", err)
 	}
-	if len(run.Tasks) == 0 {
+	if len(run.Tasks) == 0 && !live {
 		return Profile{}, fmt.Errorf("ARIES result has no task occurrences")
 	}
 	p := empty()
+	p.Configuration = safeConfiguration(root)
+	if live {
+		p.Warnings = append(p.Warnings, "Live run snapshot: final task outcomes and phase durations may not yet be available.")
+	}
 	p.RunID = run.RunID
 	p.Name = run.Name
 	p.DurationMS = float64(run.Duration) / 1e6
@@ -158,7 +222,10 @@ func loadARIES(root string) (Profile, error) {
 		if status == "" {
 			status = "unknown"
 		}
-		p.Tasks = append(p.Tasks, Task{ID: id, Name: t.TaskID, Status: status, DurationMS: float64(t.Duration) / 1e6, EvaluationStatus: t.Evaluation.Status, CleanupStatus: t.Cleanup.Status})
+		p.Tasks = append(p.Tasks, Task{ID: id, LogicalID: t.TaskID, TimeQuality: "unknown", Name: t.TaskID, Status: status, DurationMS: float64(t.Duration) / 1e6, EvaluationStatus: t.Evaluation.Status, CleanupStatus: t.Cleanup.Status})
+		if !t.ScheduledAt.IsZero() {
+			observe(t.ScheduledAt.UnixNano())
+		}
 		if !t.StartedAt.IsZero() {
 			observe(t.StartedAt.UnixNano())
 		} else {
@@ -202,6 +269,8 @@ func loadARIES(root string) (Profile, error) {
 			kind = "otel"
 		case "tool-calls.jsonl":
 			kind = "bridge"
+		case "browser-network.jsonl":
+			kind = "browser"
 		case "resources.jsonl":
 			kind = "resource"
 		case "index.json":
@@ -209,11 +278,13 @@ func loadARIES(root string) (Profile, error) {
 				return nil
 			}
 			kind = "monitor-index"
-		case "trajectory.json", "trajectory.jsonl", "agent-result.json":
+		case "trajectory.json", "agent-result.json":
 			kind = "opaque"
+		case "trajectory.jsonl":
+			kind = "trajectory"
 		default:
-			if strings.Contains(d.Name(), ".trajectory.") {
-				kind = "opaque"
+			if trajectoryName(d.Name()) {
+				kind = "trajectory"
 			} else {
 				return nil
 			}
@@ -241,6 +312,17 @@ func loadARIES(root string) (Profile, error) {
 		return Profile{}, err
 	}
 	var spans []timedSpan
+	phases, phaseErr := lifecycleSpans(root, taskDirs, readRecords)
+	if errors.Is(phaseErr, errCachedRecordLimit) {
+		return Profile{}, phaseErr
+	}
+	if phaseErr == nil {
+		for _, x := range phases {
+			observe(x.start)
+			spans = append(spans, x)
+		}
+	}
+	p.Warnings = appendUnique(p.Warnings, "Lifecycle phases require explicit start/end events; absent phase boundaries are unavailable.")
 	var resources []timedResource
 	invalid := 0
 	opaque := false
@@ -248,17 +330,18 @@ func loadARIES(root string) (Profile, error) {
 	monitorUnsupported := false
 	monitorDisabled := false
 	resourceSeen := map[string]bool{}
+	evidenceLimited := false
 	for _, a := range artifacts {
 		if a.kind == "opaque" {
 			opaque = true
 			continue
 		}
-		data, e := readBounded(a.path)
-		if e != nil {
-			p.Warnings = appendUnique(p.Warnings, "Some evidence files were unavailable or exceeded the per-file limit.")
-			continue
-		}
 		if a.kind == "monitor-index" {
+			data, e := readBounded(a.path)
+			if e != nil {
+				invalid++
+				continue
+			}
 			var index struct {
 				Status string `json:"status"`
 				Reason string `json:"reason"`
@@ -290,32 +373,33 @@ func loadARIES(root string) (Profile, error) {
 			}
 			continue
 		}
-		scanner := bufio.NewScanner(bytes.NewReader(data))
-		scanner.Buffer(make([]byte, 4096), 1<<20)
-		line := 0
-		for scanner.Scan() {
-			line++
-			if len(bytes.TrimSpace(scanner.Bytes())) == 0 {
-				continue
-			}
+		state := trajectoryState{}
+		bad, pending, readErr := readRecords(a.path, func(v map[string]any, line int) {
 			if len(spans)+len(resources) >= maxRecords {
-				return Profile{}, fmt.Errorf("run exceeds %d evidence records", maxRecords)
-			}
-			var v map[string]any
-			if decode(scanner.Bytes(), &v) != nil {
-				invalid++
-				continue
+				evidenceLimited = true
+				return
 			}
 			switch a.kind {
+			case "trajectory":
+				for _, x := range state.parse(v, a.task, line) {
+					observe(x.start)
+					spans = append(spans, x)
+				}
+			case "browser":
+				if x, ok := parseBrowser(v, a.task, line); ok {
+					observe(x.start)
+					spans = append(spans, x)
+				}
+
 			case "otel":
 				s, e := parseSpan(v, a.task, line)
 				if e != nil {
 					invalid++
-					continue
+					return
 				}
 				if a.task == "" {
 					invalid++
-					continue
+					return
 				}
 				if s.span.AgentID == "" {
 					p.Warnings = appendUnique(p.Warnings, "Some spans lack an explicit agent identity; task-level unassigned lanes do not identify measured agents.")
@@ -324,15 +408,20 @@ func loadARIES(root string) (Profile, error) {
 				spans = append(spans, s)
 			case "bridge":
 				start := timestamp(v["timestamp"])
-				duration := number(v["duration_ms"])
+				durationReading := optionalNumber(v, "duration_ms")
+				if durationReading == nil {
+					invalid++
+					return
+				}
+				duration := *durationReading
 				if start <= 0 || !validTime(duration) || duration > float64(start)/1e6 {
 					invalid++
-					continue
+					return
 				}
 				start -= int64(duration * 1e6)
 				if start <= 0 {
 					invalid++
-					continue
+					return
 				}
 				op := text(v["operation_class"])
 				if op == "" {
@@ -343,7 +432,7 @@ func loadARIES(root string) (Profile, error) {
 				}
 				if a.task == "" {
 					invalid++
-					continue
+					return
 				}
 				s := Span{ID: fmt.Sprintf("%s/bridge/%d", a.task, line), TaskID: a.task, AgentID: "", Name: "Bridge · " + op, Kind: "tool", Status: text(v["status"]), Source: "ARIES bridge", DurationMS: duration, Attributes: filterAttributes(map[string]any{"exit_code": v["exit_code"]})}
 				spans = append(spans, timedSpan{span: s, start: start, end: start + int64(duration*1e6)})
@@ -352,7 +441,7 @@ func loadARIES(root string) (Profile, error) {
 				at := timestamp(v["time"])
 				if at <= 0 {
 					invalid++
-					continue
+					return
 				}
 				r := Resource{TaskID: a.task, Component: text(v["component"]), RuntimeID: text(v["runtime_id"])}
 				r.CPUPercent = optionalNumber(v, "cpu_percent")
@@ -370,22 +459,54 @@ func loadARIES(root string) (Profile, error) {
 				}
 				if r.CPUPercent == nil && r.MemoryBytes == nil && r.GPUPercent == nil {
 					invalid++
-					continue
+					return
 				}
 				resources = append(resources, timedResource{r, at})
 				observe(at)
 			}
+		})
+		invalid += bad
+		if pending {
+			p.Warnings = appendUnique(p.Warnings, "A trailing partial evidence record is pending and will be retried on refresh.")
 		}
-		if scanner.Err() != nil {
-			invalid++
-			p.Warnings = appendUnique(p.Warnings, "An evidence file contains an oversized or unreadable record; later records were not loaded.")
+		if errors.Is(readErr, errCachedRecordLimit) {
+			return Profile{}, readErr
 		}
+		if readErr != nil {
+			p.Warnings = appendUnique(p.Warnings, "An evidence file could not be fully read within streaming limits.")
+		}
+		if a.kind == "trajectory" {
+			if !state.supported {
+				opaque = true
+			} else {
+				p.Capabilities = append(p.Capabilities, Capability{"openclaw_trajectory/" + a.task, "partial", "Native session intervals, explicit tool-call IDs and model completion usage; missing model durations remain unavailable."})
+				p.Warnings = appendUnique(p.Warnings, "OpenClaw model completion markers retain token usage but do not imply a measured model duration.")
+				for _, x := range state.starts {
+					observe(x.start)
+					spans = append(spans, x)
+				}
+			}
+		}
+		if a.kind == "browser" {
+			p.Capabilities = append(p.Capabilities, Capability{"browser_network/" + a.task, "partial", "Sandbox-produced request and page timings; source integrity is not independently verified."})
+			p.Warnings = appendUnique(p.Warnings, "Browser network evidence is produced inside the task sandbox; URLs and request payloads are omitted.")
+		}
+	}
+
+	if evidenceLimited {
+		p.Warnings = appendUnique(p.Warnings, "Evidence record limit reached; profile coverage is partial.")
 	}
 	if origin == 0 {
 		p.Warnings = appendUnique(p.Warnings, "No absolute timestamps available; only task durations are known.")
 	}
 	for i, t := range run.Tasks {
+		if !t.ScheduledAt.IsZero() && !t.StartedAt.IsZero() && !t.StartedAt.Before(t.ScheduledAt) {
+			observe(t.ScheduledAt.UnixNano())
+			spans = append(spans, timedSpan{span: Span{ID: p.Tasks[i].ID + "/lifecycle/queue", TaskID: p.Tasks[i].ID, Name: "Queue", Kind: "lifecycle", Status: "completed", Source: "ARIES task result", DurationMS: float64(t.StartedAt.Sub(t.ScheduledAt)) / 1e6, Attributes: map[string]any{"phase": "queue"}}, start: t.ScheduledAt.UnixNano(), end: t.StartedAt.UnixNano()})
+		}
 		if !t.StartedAt.IsZero() {
+			p.Tasks[i].TimeQuality = "measured"
+			spans = append(spans, timedSpan{span: Span{ID: p.Tasks[i].ID + "/lifecycle/task", TaskID: p.Tasks[i].ID, Name: "Task lifecycle", Kind: "lifecycle", Status: p.Tasks[i].Status, DurationMS: p.Tasks[i].DurationMS, Source: "ARIES task result", Attributes: map[string]any{"phase": "task"}}, start: t.StartedAt.UnixNano(), end: t.StartedAt.UnixNano() + t.Duration})
 			p.Tasks[i].StartMS = float64(t.StartedAt.UnixNano()-origin) / 1e6
 		}
 		p.DurationMS = max(p.DurationMS, p.Tasks[i].StartMS+p.Tasks[i].DurationMS)
@@ -447,6 +568,43 @@ func loadARIES(root string) (Profile, error) {
 		resolve(&p.Spans[i])
 	}
 
+	// Native phase edges originate in explicit control-flow IDs emitted by
+	// Runner; never connect them to harness spans using temporal containment.
+	depAdj := map[string][]string{}
+	for _, native := range spans {
+		if native.dependency == "" {
+			continue
+		}
+		target := byID[native.span.ID]
+		source := byID[native.dependency]
+		if target == nil || source == nil || target.Incomplete || source.Incomplete || target.TaskID != source.TaskID {
+			p.Warnings = appendUnique(p.Warnings, "Some phase dependencies are unresolved or incomplete; those edges are omitted.")
+			continue
+		}
+		stack := []string{target.ID}
+		seen := map[string]bool{}
+		cycle := false
+		for len(stack) > 0 {
+			n := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if n == source.ID {
+				cycle = true
+				break
+			}
+			if seen[n] {
+				continue
+			}
+			seen[n] = true
+			stack = append(stack, depAdj[n]...)
+		}
+		if cycle {
+			p.Warnings = appendUnique(p.Warnings, "Malformed cyclic phase dependencies were omitted.")
+			continue
+		}
+		p.Edges = append(p.Edges, Edge{Source: source.ID, Target: target.ID, Kind: "dependency"})
+		depAdj[source.ID] = append(depAdj[source.ID], target.ID)
+	}
+
 	for _, r := range resources {
 		r.r.TimeMS = float64(r.at-origin) / 1e6
 		p.Resources = append(p.Resources, r.r)
@@ -482,6 +640,14 @@ func loadARIES(root string) (Profile, error) {
 		p.Capabilities = append(p.Capabilities, Capability{"openclaw_trajectory", "unsupported", "Opaque trajectory data has no supported span timing contract; use bridge evidence or normalized spans."})
 	}
 	p.Warnings = appendUnique(p.Warnings, "Timeline origin is the earliest retained task or observation timestamp; cross-process clock synchronization is not verified.")
+	if f, e := os.Open(filepath.Join(root, "events.jsonl")); e == nil {
+		next, eventErr := ApplyEvents(p, f)
+		f.Close()
+		if eventErr != nil {
+			return Profile{}, eventErr
+		}
+		p = next
+	}
 	if err := Validate(&p); err != nil {
 		return Profile{}, fmt.Errorf("invalid ARIES profile: %w", err)
 	}
@@ -594,7 +760,15 @@ func parseSpan(v map[string]any, task string, line int) (timedSpan, error) {
 	attrs, _ := v["attributes"].(map[string]any)
 	agent := text(v["agent_id"])
 	if agent == "" {
-		agent = text(attrs["agent.id"])
+		agent = sourceIdentity(v, attrs)
+	}
+	runtimeID := text(v["runtime_id"])
+	if runtimeID == "" {
+		runtimeID = text(attrs["runtime.id"])
+	}
+	var usage *Usage
+	if in, out := optionalNumber(attrs, "gen_ai.usage.input_tokens"), optionalNumber(attrs, "gen_ai.usage.output_tokens"); in != nil || out != nil {
+		usage = &Usage{InputTokens: in, OutputTokens: out}
 	}
 	attrs = filterAttributes(attrs)
 	status := text(v["status"])
@@ -609,5 +783,5 @@ func parseSpan(v map[string]any, task string, line int) (timedSpan, error) {
 	if status == "" {
 		status = "unknown"
 	}
-	return timedSpan{span: Span{ID: task + "/otel/" + trace + "/" + nativeID, TaskID: task, AgentID: agent, Name: name, Kind: kind, Status: status, DurationMS: float64(end-start) / 1e6, Source: "OpenTelemetry", Attributes: attrs}, start: start, end: end, rawID: id, rawParent: parent, trace: trace}, nil
+	return timedSpan{span: Span{ID: task + "/otel/" + trace + "/" + nativeID, TaskID: task, AgentID: agent, RuntimeID: runtimeID, Usage: usage, Name: name, Kind: kind, Status: status, DurationMS: float64(end-start) / 1e6, Source: "OpenTelemetry", Attributes: attrs}, start: start, end: end, rawID: id, rawParent: parent, trace: trace}, nil
 }

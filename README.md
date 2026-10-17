@@ -1,14 +1,14 @@
 # TraceX
 
-A local, offline agent workload profiler for [ARIES](https://github.com/hyscale-lab/ARIES). Inspect an agent DAG alongside a linear timeline, correlate resource samples, and inspect the evidence behind each span. TraceX is an independent visualization extension; BrowserBench remains a workload extension.
+An agent workload profiler for [ARIES](https://github.com/hyscale-lab/ARIES) and backends that emit the TraceX event contract. Explore explicit execution DAGs, a linear timeline, resource signals, critical paths, and experiment comparisons. TraceX is an independent profiler; BrowserBench remains an ARIES workload extension.
 
-The default view uses **synthetic demo data**. It does not represent a measured benchmark result.
+The default workspace contains **two synthetic experiments**. Their timing, dependencies, usage, and resource signals are authored examples, not benchmark results.
 
-![TraceX synthetic demo with an agent DAG, linear timeline, and resource signals](docs/images/explorer.png)
+![TraceX agent DAG, timeline, analysis, and resource signals](docs/images/explorer.png)
 
 ## Run
 
-Go 1.26 or later is required. The application uses the Go standard library and embedded HTML, JavaScript, and CSS; no Node installation or remote UI assets are needed.
+Go 1.26 or later is required. The binary embeds the complete UI and uses only the Go standard library. No Node installation, UI build, CDN, or model API is needed to run it.
 
 ```sh
 git clone https://github.com/aeilot/TraceX.git
@@ -16,43 +16,72 @@ cd TraceX
 make run
 ```
 
-Open [http://127.0.0.1:4318](http://127.0.0.1:4318). To load your own data:
+Open [http://127.0.0.1:4318](http://127.0.0.1:4318).
+
+Load ARIES runs, normalized JSON, or event streams:
 
 ```sh
 go run ./cmd/tracex --run /path/to/aries/runs/RUN_ID
-go run ./cmd/tracex --run /path/to/profile.json --addr 127.0.0.1:4319
+go run ./cmd/tracex --run baseline.json --run candidate.json
+go run ./cmd/tracex --runs-dir /path/to/aries/runs --watch 1s
+go run ./cmd/tracex --run events.jsonl --watch 250ms
+go run ./cmd/tracex --run profile.json --watch 0 --addr 127.0.0.1:4319
 ```
 
-The server reads one snapshot at startup. Restart it to refresh a changed run. It binds to loopback by default; setting a public address makes the profile accessible on that interface. Stop with Ctrl-C.
+`--run` is repeatable. `--runs-dir` discovers immediate directories and `.json` files at startup; new directories require restarting discovery. Mounted sources update automatically; `--watch 0` disables watching. The browser can pause/resume updates without stopping the source. Binding defaults to loopback; changing the address changes who can access your local data. Stop with Ctrl-C.
 
-Export a portable normalized snapshot without starting the server:
+Export a complete normalized snapshot, including data outside the current page:
 
 ```sh
-go run ./cmd/tracex --run /path/to/aries/runs/RUN_ID --export profile.json
-go run ./cmd/tracex --export - > demo-profile.json
+go run ./cmd/tracex --run /path/to/run --export profile.json
+go run ./cmd/tracex --run events.jsonl --export - > profile.json
 make build
 ./bin/tracex --help
 ```
 
 ## Explore
 
-- Switch between **Agent DAG**, **Timeline**, and **Split view**. Parent edges never come from timestamp order.
-- Filter by task occurrence, span type, or agent/name search (`/` focuses search).
-- Select a DAG node or timeline bar to inspect timing, source, IDs, and outcomes. `Escape` closes details.
-- Zoom the timeline or fit the DAG; filter resource charts by runtime. CPU and memory signals use the same run origin.
-- Import normalized JSON directly in the browser or export the current snapshot. Browser imports remain local.
+- **Agent DAG / timeline / split view:** explicit parent, spawn, call, return, dependency, and multi-parent join relationships. Cyclic graphs are rejected.
+- **Analysis:** per-kind interval unions and summed work, task P50/P95, throughput, effective work concurrency, input/output tokens with known-usage coverage, and unobserved task time.
+- **Recorded critical path:** longest sum of completed span durations on explicit finish-before-start dependency/join/return edges. Parent containment and unrecorded waits are excluded. Missing or contradictory precedence remains unavailable.
+- **Linked time window:** enter a range or drag empty timeline space. Spans and CPU/memory/GPU signals share the window. Span details show concurrent resource sample statistics, with runtime/task/shared context labels rather than causal cost claims.
+- **Comparison:** choose baseline and candidate runs, inspect configuration differences, latency, throughput, tokens, and evidence coverage. Imported JSON profiles can be compared with mounted sources.
+- **Large runs:** server-side filtering and pagination, stable time ordering, overlap indexes, span lookup across pages, and per-runtime resource envelopes that retain observed extrema and missing-value boundaries. Every matching span remains reachable through pagination.
+- **Live sources:** incrementally decoded JSONL, partial-line handling, truncation/rotation recovery, last-valid snapshots on malformed updates, and reconnectable server-sent revision notifications.
 
-## Evidence and backend compatibility
+## Data sources
 
-TraceX separates the display model from data ingestion. ARIES task lifecycle and resource artifacts, recognized harness telemetry, and normalized TraceX JSON map into one profile. A backend can produce normalized JSON without taking a dependency on ARIES or on the UI. See [input formats and measurement limits](docs/inputs.md) and the [normalized schema](docs/schema.md).
+| Source | Evidence |
+| --- | --- |
+| ARIES | Task/queue lifecycle, phase events, separate outcomes, sanitized comparison configuration, resource counters |
+| Hermes | Retained OpenTelemetry spans, explicit parents, selected model usage and identity metadata |
+| OpenClaw | Native sessions, explicitly matched tool-call intervals, model completion usage, and bridge evidence |
+| BrowserBench | Browser request/page intervals; URL, body, and query content omitted |
+| Other backends | Versioned normalized JSON or append-only events |
 
-DAG edges require an explicit parent ID. Timestamp order or overlap never establishes a dependency. Missing parent relationships produce disconnected roots. The timeline displays elapsed time; overlapping spans do not add up to wall time. Missing resource samples remain missing, rather than becoming measured zero.
+Older runs cannot recover measurements they never recorded. In particular, a model completion with no start time is displayed as a marker with unavailable duration. Existing ARIES runs show task intervals, while full phase boundaries require the [ARIES instrumentation integration](docs/aries-integration.md). Cross-process clock synchronization is not verified. BrowserBench sandbox timing retains its source-integrity warning.
 
-This first version provides offline snapshots, not live collection, distributed clock correction, or arbitrary backend auto-detection. OpenClaw native trajectories are unsupported unless a recognized OpenTelemetry artifact is available. Browser evidence is optional and is not required to inspect a standard ARIES run.
+See [inputs and measurement limits](docs/inputs.md), [schema](docs/schema.md), [event producers](docs/events.md), and [architecture](docs/architecture.md).
+
+## Try a live producer
+
+The included producer emits synthetic lifecycle, branched work, joins, usage, and GPU events. It makes no model or network calls.
+
+```sh
+# Terminal 1: create the stream, then emit newline-committed updates.
+mkdir -p .cache/live
+: > .cache/live/events.jsonl
+go run ./examples/producer --interval 300ms >> .cache/live/events.jsonl
+
+# Terminal 2: watch it (start while the producer is running).
+go run ./cmd/tracex --run .cache/live/events.jsonl --watch 100ms
+```
+
+The producer has a finite demonstration sequence. Restart it by truncating the stream first; TraceX detects the reset. [examples/events.jsonl](examples/events.jsonl) is a complete synthetic fixture.
 
 ## Local data
 
-The service exposes only normalized profile JSON and bundled assets. It does not serve the input directory or raw logs, call model APIs, or upload runs. Input names and selected metadata still appear in profiles: review exported data before sharing. Private run directories and exports belong outside version control; `runs/` and `exports/` are ignored.
+The service exposes normalized summaries and bundled assets. It does not serve run directories or raw logs, execute evidence, call models, or upload runs. Prompts, tool arguments, outputs, raw errors, and credentials are excluded by the adapters. Names, IDs, selected metadata, and comparison conditions can still be sensitive; review exports before sharing. Browser imports stay local. Private runs and exports belong outside Git.
 
 ## Develop
 
@@ -60,4 +89,4 @@ The service exposes only normalized profile JSON and bundled assets. It does not
 make check
 ```
 
-Node.js 22 or later is needed only for frontend verification. This runs Go unit tests, browser-model tests using Node’s built-in test runner, JavaScript syntax checks, the race detector, Go vet, and a binary build. Go caches live under `.cache/`. CLI tests cover export/reload, invalid inputs, occupied ports, and cancellation; HTTP tests cover assets, MIME types, API JSON, read-only methods, and raw-file isolation. See [architecture](docs/architecture.md) and [verification evidence](docs/verification.md).
+Node.js 22 or later is needed only for browser-model tests. Checks cover Go tests, JavaScript syntax/model tests, the race detector, vet, and a binary build. See [verification evidence](docs/verification.md) for browser, native-data, streaming, and scale checks.

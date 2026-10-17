@@ -18,12 +18,16 @@
     <aside class="sidebar">
       <a class="brand" href="/" aria-label="TraceX home"
         ><span class="brand-icon">↗</span> Trace<span class="brand-x">X</span
-        ><span class="version">0.1</span></a
+        ><span class="version">0.2</span></a
       >
       <div class="workspace-label">OBSERVABILITY WORKSPACE</div>
       <button id="overview" class="nav-item active">
         <span>◈</span> Workload explorer <span class="nav-count">1</span>
       </button>
+      <div class="sidebar-section run-section"><span>RUNS</span></div>
+      <label class="run-picker-label"
+        ><select id="run-picker" aria-label="Select run"></select
+      ></label>
       <div class="sidebar-section">
         <span>THIS RUN</span><span id="task-count">—</span>
       </div>
@@ -51,9 +55,16 @@
           Workspace <span>/</span> <strong>Workload explorer</strong>
         </div>
         <div class="header-actions">
+          <select
+            id="run-picker-mobile"
+            aria-label="Select active run"
+          ></select>
           <span class="local-badge"
-            ><span class="status-dot"></span> Local analysis</span
-          ><button id="load-source" class="button subtle">Reset source</button
+            ><span class="status-dot"></span>
+            <span id="live-status">Connecting</span></span
+          ><button id="pause-live" class="button subtle" aria-pressed="false">
+            Pause live</button
+          ><button id="load-source" class="button subtle">Refresh</button
           ><button id="import-button" class="button">↑ Import profile</button
           ><input
             id="import-file"
@@ -113,6 +124,59 @@
             </div>
           </div>
         </section>
+        <section class="analysis-card" aria-label="Workload analysis">
+          <div class="analysis-metrics" id="analysis-metrics"></div>
+          <div class="analysis-grid">
+            <div class="breakdown">
+              <h3>Where the work happens</h3>
+              <p>Union time within each kind; categories can overlap.</p>
+              <div id="kind-breakdown"></div>
+            </div>
+            <div class="critical-card">
+              <div class="critical-heading">
+                <h3>Recorded critical path</h3>
+                <button
+                  id="highlight-critical"
+                  class="button small"
+                  aria-pressed="false"
+                >
+                  Highlight path
+                </button>
+              </div>
+              <strong id="critical-duration">—</strong>
+              <p id="critical-reason">Waiting for evidence</p>
+              <div id="critical-nodes"></div>
+            </div>
+          </div>
+          <details class="task-coverage">
+            <summary>Task latency and evidence coverage</summary>
+            <div id="coverage-table" class="table-scroll"></div>
+          </details>
+        </section>
+        <section class="comparison-card" aria-label="Compare runs">
+          <details id="comparison-details">
+            <summary>
+              Compare experiments
+              <span>Configuration, latency, usage, and coverage</span>
+            </summary>
+            <div class="comparison-controls">
+              <label
+                >Baseline
+                <select
+                  id="compare-left"
+                  aria-label="Baseline run"
+                ></select></label
+              ><label
+                >Candidate
+                <select
+                  id="compare-right"
+                  aria-label="Candidate run"
+                ></select></label
+              ><button id="compare-button" class="button">Compare</button>
+            </div>
+            <div id="comparison-result" class="table-scroll"></div>
+          </details>
+        </section>
         <section class="explorer" aria-label="Execution explorer">
           <div class="explorer-toolbar">
             <div
@@ -148,7 +212,39 @@
             ><span><i class="legend-dot browser"></i>Browser</span
             ><span><i class="legend-dot evaluation"></i>Evaluation</span
             ><span class="legend-explanation"
-              >Relationships from explicit parent IDs</span
+              >Explicit parent, spawn, call, return, dependency & join
+              edges</span
+            >
+          </div>
+          <div class="range-toolbar">
+            <span class="range-caption">TIME WINDOW</span
+            ><label
+              >From
+              <input
+                id="range-start"
+                type="number"
+                min="0"
+                value="0"
+                step="0.1"
+                aria-label="Time window start seconds"
+              />
+              s</label
+            ><label
+              >To
+              <input
+                id="range-end"
+                type="number"
+                min="0"
+                value="0"
+                step="0.1"
+                aria-label="Time window end seconds"
+              />
+              s</label
+            ><button id="apply-range" class="button small">Apply</button
+            ><button id="full-range" class="button subtle small">
+              Full run</button
+            ><span class="brush-hint"
+              >Drag empty timeline space to select a window</span
             >
           </div>
           <section id="dag-panel" class="visual-panel">
@@ -217,6 +313,23 @@
               >
             </div>
           </section>
+          <div class="pagination">
+            <div>
+              <strong id="page-label">—</strong
+              ><small id="edge-coverage"></small>
+            </div>
+            <div class="page-controls">
+              <label
+                >Page size
+                <select id="page-size" aria-label="Spans per page">
+                  <option>50</option>
+                  <option selected>250</option>
+                  <option>500</option>
+                </select></label
+              ><button id="page-prev" class="button small">← Previous</button
+              ><button id="page-next" class="button small">Next →</button>
+            </div>
+          </div>
         </section>
         <section class="resources-card">
           <div class="panel-heading">
@@ -227,6 +340,12 @@
               ><span class="tag">Observed samples</span>
             </div>
           </div>
+          <p
+            id="resource-message"
+            class="resource-message"
+            role="status"
+            hidden
+          ></p>
           <div class="resource-grid">
             <div class="resource-chart">
               <div class="chart-title">
@@ -249,9 +368,20 @@
               ></svg>
             </div>
           </div>
+          <div class="resource-chart gpu-chart">
+            <div class="chart-title">
+              <span>GPU utilization</span><strong id="gpu-peak">—</strong>
+            </div>
+            <svg
+              id="gpu-chart"
+              role="img"
+              aria-label="GPU utilization over time"
+            ></svg>
+          </div>
           <div class="resource-footer">
-            Runtime signals share the timeline axis. Missing measurements remain
-            gaps; shared infrastructure is not attributed to tasks.
+            Signals share the selected time window. Envelopes preserve observed
+            peaks and gaps; device and shared infrastructure measurements remain
+            separate from task attribution.
           </div>
         </section>
         <section
