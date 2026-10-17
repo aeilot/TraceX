@@ -916,3 +916,26 @@ h2 {
     max-width: 100%;
   }
 }
+/* Language switch and Chinese text. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+#language-picker {
+  font: 11px var(--mono);
+  padding: 4px 6px;
+}
+:lang(zh-CN) {
+  --mono: ui-monospace, "SF Mono", Menlo, "PingFang SC", "Noto Sans Mono CJK SC", monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+}
+:lang(zh-CN) .metric-label,
+:lang(zh-CN) .eyebrow,
+:lang(zh-CN) .sidebar-section,
+:lang(zh-CN) .workspace-label {
+  letter-spacing: 0.04em;
+}

@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/aeilot/TraceX/internal/profile"
+	"github.com/aeilot/TraceX/web"
 )
 
 func TestRoutes(t *testing.T) {
@@ -21,6 +23,7 @@ func TestRoutes(t *testing.T) {
 		contentType string
 	}{
 		{"/", 200, "text/html"},
+		{"/i18n.js", 200, "javascript"},
 		{"/app.js", 200, "javascript"},
 		{"/profile.js", 200, "javascript"},
 		{"/styles.css", 200, "text/css"},
@@ -46,6 +49,30 @@ func TestRoutes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestPageAssetsServed fetches every script and stylesheet the page names, so
+// a new asset cannot be embedded yet missing from the served allowlist.
+func TestPageAssetsServed(t *testing.T) {
+	handler, err := New(profile.Demo())
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := web.Files.ReadFile("index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assets := regexp.MustCompile(`(?:src|href)="(/[^"/]+\.(?:js|css))"`).FindAllStringSubmatch(string(page), -1)
+	if len(assets) == 0 {
+		t.Fatal("no page assets found")
+	}
+	for _, asset := range assets {
+		r := httptest.NewRecorder()
+		handler.ServeHTTP(r, httptest.NewRequest(http.MethodGet, asset[1], nil))
+		if r.Code != http.StatusOK {
+			t.Errorf("%s: status %d", asset[1], r.Code)
+		}
 	}
 }
 

@@ -7,6 +7,7 @@ const {
   windowStats,
   page: localPage,
 } = globalThis.TraceXProfile;
+const t9n = globalThis.TraceXI18n.t;
 const $ = (s) => document.querySelector(s),
   NS = "http://www.w3.org/2000/svg";
 const colors = {
@@ -85,7 +86,7 @@ function rate(perSecond) {
   return `${(perSecond * 3600).toFixed(2)} / h`;
 }
 function bytes(n) {
-  if (n == null) return "Unavailable";
+  if (n == null) return t9n("Unavailable");
   return n >= 1073741824
     ? `${(n / 1073741824).toFixed(2)} GiB`
     : `${(n / 1048576).toFixed(1)} MiB`;
@@ -98,22 +99,22 @@ function failedTask(t) {
 }
 function flagText(t) {
   const out = [];
-  if (t.flags?.includes("duration_outlier")) out.push("duration outlier");
-  if (t.flags?.includes("sparse_monitor")) out.push("sparse monitor");
+  if (t.flags?.includes("duration_outlier")) out.push(t9n("duration outlier"));
+  if (t.flags?.includes("sparse_monitor")) out.push(t9n("sparse monitor"));
   return out.join(" · ");
 }
 function networkText(n) {
   if (!n) return "—";
-  const parts = [`${(n.requests ?? 0).toLocaleString()} req`];
-  if (n.failed) parts.push(`${n.failed.toLocaleString()} failed`);
+  const parts = [t9n("{count} req", { count: (n.requests ?? 0).toLocaleString() })];
+  if (n.failed) parts.push(t9n("{count} failed", { count: n.failed.toLocaleString() }));
   if (n.response_bytes != null) parts.push(bytes(n.response_bytes));
   return parts.join(" · ");
 }
 function spanDuration(s) {
   return s.incomplete
-    ? "In progress"
+    ? t9n("In progress")
     : ["completion_only", "unknown"].includes(s.attributes?.time_quality)
-      ? "Timing unavailable"
+      ? t9n("Timing unavailable")
       : format(s.duration_ms);
 }
 function short(s, n = 26) {
@@ -231,7 +232,7 @@ async function loadSource() {
 }
 function showError(e) {
   $("#notice").textContent =
-    `Source update failed: ${e.message}. The last valid view is retained.`;
+    t9n("Source update failed: {error}. The last valid view is retained.", { error: e.message });
   $("#notice").hidden = false;
 }
 async function loadView() {
@@ -302,16 +303,16 @@ function setLiveStatus(label) {
   $("#live-status").textContent =
     label ||
     (state.imported
-      ? "Local import"
+      ? t9n("Local import")
       : state.paused
-        ? "Updates paused"
+        ? t9n("Updates paused")
         : run?.last_error
-          ? "Source error"
+          ? t9n("Source error")
           : run?.live
-            ? `Watching · rev ${state.revision}`
-            : "Snapshot");
+            ? t9n("Watching · rev {revision}", { revision: state.revision })
+            : t9n("Snapshot"));
   $("#pause-live").disabled = state.imported || !state.watchInterval;
-  $("#pause-live").textContent = state.paused ? "Resume live" : "Pause live";
+  $("#pause-live").textContent = state.paused ? t9n("Resume live") : t9n("Pause live");
   $("#pause-live").setAttribute("aria-pressed", String(state.paused));
 }
 function connectEvents() {
@@ -325,7 +326,7 @@ function connectEvents() {
       if (update.run_id === state.runKey) {
         if (update.error) {
           showError(Error(update.error));
-          setLiveStatus("Source error");
+          setLiveStatus(t9n("Source error"));
         } else await loadView();
       }
       const data = await json("/api/runs");
@@ -333,10 +334,10 @@ function connectEvents() {
       updateRunPickers();
       setLiveStatus();
     } catch {
-      setLiveStatus("Reconnecting");
+      setLiveStatus(t9n("Reconnecting"));
     }
   });
-  stream.onerror = () => setLiveStatus("Reconnecting");
+  stream.onerror = () => setLiveStatus(t9n("Reconnecting"));
   stream.onopen = () => {
     setLiveStatus();
     // Reconcile after every subscription: notice history is deliberately bounded.
@@ -346,28 +347,28 @@ function connectEvents() {
 function render() {
   const p = state.profile,
     a = state.analysis;
-  $("#run-name").textContent = p.name || "Untitled workload";
-  $("#run-id").textContent = short(p.run_id || "Imported profile", 65);
+  $("#run-name").textContent = p.name || t9n("Untitled workload");
+  $("#run-id").textContent = short(p.run_id || t9n("Imported profile"), 65);
   const synthetic = (p.name + " " + p.run_id + " " + p.warnings.join(" "))
     .toLowerCase()
     .includes("synthetic");
   $("#dataset-badge").textContent = synthetic
-    ? "Synthetic demo"
+    ? t9n("Synthetic demo")
     : state.imported
-      ? "Imported profile"
-      : "Recorded artifacts";
+      ? t9n("Imported profile")
+      : t9n("Recorded artifacts");
   $("#run-state").textContent = synthetic
-    ? "Demo dataset"
+    ? t9n("Demo dataset")
     : state.runs.find((r) => r.id === state.runKey)?.live
-      ? "Live source"
-      : "Recorded evidence";
+      ? t9n("Live source")
+      : t9n("Recorded evidence");
   $("#metric-duration").textContent = format(p.duration_ms);
   $("#metric-agents").textContent = a.agent_count || "—";
   $("#metric-spans").textContent = (
     a.span_count ?? state.totalSpans
   ).toLocaleString();
   $("#metric-span-note").textContent =
-    `Across ${p.tasks.length} task occurrences · full run`;
+    t9n("Across {count} task occurrences · full run", { count: p.tasks.length });
   const kindTime = (k) => {
     const item = a.kinds.find((x) => x.kind === k);
     return item && item.time_quality !== "completion_only"
@@ -385,7 +386,7 @@ function render() {
   );
   all.append(
     html("span", "status-dot"),
-    html("span", "task-name", "All task occurrences"),
+    html("span", "task-name", t9n("All task occurrences")),
   );
   all.onclick = () => setTask("all");
   list.append(all);
@@ -397,8 +398,8 @@ function render() {
     const flags = flagText(t);
     b.title = [
       t.id,
-      Number.isFinite(t.score) ? `accuracy ${t.score.toFixed(3)}` : "",
-      t.end_reason ? `ended: ${t.end_reason}` : "",
+      Number.isFinite(t.score) ? t9n("accuracy {score}", { score: t.score.toFixed(3) }) : "",
+      t.end_reason ? t9n("ended: {reason}", { reason: t9n(t.end_reason) }) : "",
       flags,
     ]
       .filter(Boolean)
@@ -418,7 +419,7 @@ function render() {
     list.append(b);
   }
   const select = $("#kind-filter");
-  select.replaceChildren(new Option("All span types", "all"));
+  select.replaceChildren(new Option(t9n("All span types"), "all"));
   for (const k of a.kinds.map((k) => k.kind).sort())
     select.add(new Option(k[0].toUpperCase() + k.slice(1), k));
   select.value = state.kind;
@@ -432,7 +433,7 @@ function render() {
       `capability ${["unsupported", "not_enabled", "failed", "unavailable"].includes(c.status) ? "unavailable" : ""}`,
     );
     item.append(html("span", "status-dot"), html("span", "", c.name));
-    item.title = `${c.status}${c.reason ? ": " + c.reason : ""}`;
+    item.title = `${t9n(c.status)}${c.reason ? ": " + t9n(c.reason) : ""}`;
     caps.append(item);
   }
   const runtime = $("#resource-filter"),
@@ -445,13 +446,13 @@ function render() {
       r.runtime_id || r.component,
       r.component + (r.runtime_id ? " · " + short(r.runtime_id, 16) : ""),
     );
-  runtime.replaceChildren(new Option("All runtimes", "all"));
+  runtime.replaceChildren(new Option(t9n("All runtimes"), "all"));
   for (const [k, v] of names) runtime.add(new Option(v, k));
   runtime.value = state.runtime;
   $("#resource-message").hidden = !state.resourceError;
-  $("#resource-message").textContent = state.resourceError;
+  $("#resource-message").textContent = t9n(state.resourceError);
   $(".resource-controls .tag").textContent =
-    `${state.resourceReturned.toLocaleString()} / ${state.resourceTotal.toLocaleString()} samples`;
+    t9n("{returned} / {total} samples", { returned: state.resourceReturned.toLocaleString(), total: state.resourceTotal.toLocaleString() });
   const cov = $("#coverage");
   cov.replaceChildren();
   cov.append(
@@ -459,20 +460,20 @@ function render() {
       "p",
       "",
       synthetic
-        ? "Synthetic demo. Agent relationships, timing, usage and resource signals are authored example data."
-        : "Evidence coverage. Relationships require explicit references; overlapping timing does not establish causality.",
+        ? t9n("Synthetic demo. Agent relationships, timing, usage and resource signals are authored example data.")
+        : t9n("Evidence coverage. Relationships require explicit references; overlapping timing does not establish causality."),
     ),
   );
   for (const w of p.warnings)
     if (!synthetic || !w.toLowerCase().includes("synthetic"))
-      cov.append(html("p", "", w));
+      cov.append(html("p", "", t9n(w)));
   if (p.capabilities.length) {
     const details = html("details", "coverage-details");
     details.append(
       html(
         "summary",
         "",
-        `Inspect ${p.capabilities.length} source coverage reports`,
+        t9n("Inspect {count} source coverage reports", { count: p.capabilities.length }),
       ),
     );
     for (const c of p.capabilities)
@@ -480,7 +481,7 @@ function render() {
         html(
           "p",
           "",
-          `${c.name}: ${c.status}${c.reason ? " · " + c.reason : ""}`,
+          `${c.name}: ${t9n(c.status)}${c.reason ? " · " + t9n(c.reason) : ""}`,
         ),
       );
     cov.append(details);
@@ -489,11 +490,11 @@ function render() {
   $("#range-start").value = Number((b.start / 1000).toFixed(3));
   $("#range-end").value = Number((b.end / 1000).toFixed(3));
   $("#page-label").textContent = state.totalSpans
-    ? `${state.pageOffset + 1}–${Math.min(state.pageOffset + state.pageLimit, state.totalSpans)} of ${state.totalSpans.toLocaleString()} matching spans`
-    : "No matching spans";
+    ? t9n("{first}–{last} of {total} matching spans", { first: state.pageOffset + 1, last: Math.min(state.pageOffset + state.pageLimit, state.totalSpans), total: state.totalSpans.toLocaleString() })
+    : t9n("No matching spans");
   $("#edge-coverage").textContent = state.hiddenEdges
-    ? `${state.hiddenEdges} relationships cross this page; inspect a node to follow neighbors.`
-    : "All relationships between visible spans are shown.";
+    ? t9n("{count} relationships cross this page; inspect a node to follow neighbors.", { count: state.hiddenEdges })
+    : t9n("All relationships between visible spans are shown.");
   $("#page-prev").disabled = state.pageOffset === 0;
   $("#page-next").disabled =
     state.pageOffset + state.pageLimit >= state.totalSpans;
@@ -508,27 +509,27 @@ function renderAnalysis() {
   const done = a.task_succeeded + a.task_failed;
   for (const [label, value, note] of [
     [
-      "P50 / P95 TASK LATENCY",
+      t9n("P50 / P95 TASK LATENCY"),
       done ? `${format(a.task_p50_ms)} / ${format(a.task_p95_ms)}` : "—",
-      "Completed task occurrences",
+      t9n("Completed task occurrences"),
     ],
     [
-      "MEAN ACCURACY",
+      t9n("MEAN ACCURACY"),
       a.score_known ? score(a.score_mean) : "—",
       a.score_known
-        ? `Recorded score.json · ${a.score_known}/${a.task_count} tasks`
-        : "No continuous scores recorded",
+        ? t9n("Recorded score.json · {known}/{total} tasks", { known: a.score_known, total: a.task_count })
+        : t9n("No continuous scores recorded"),
     ],
-    ["PEAK WORK CONCURRENCY", a.max_concurrency, "Nested envelopes excluded"],
+    [t9n("PEAK WORK CONCURRENCY"), a.max_concurrency, t9n("Nested envelopes excluded")],
     [
-      "THROUGHPUT",
+      t9n("THROUGHPUT"),
       rate(a.throughput_per_second),
-      `${a.task_succeeded} succeeded · ${a.task_failed} failed`,
+      t9n("{succeeded} succeeded · {failed} failed", { succeeded: a.task_succeeded, failed: a.task_failed }),
     ],
     [
-      "MODEL TOKENS",
+      t9n("MODEL TOKENS"),
       `${a.usage.input_tokens?.toLocaleString() ?? "—"} / ${a.usage.output_tokens?.toLocaleString() ?? "—"}`,
-      `Input / output · ${a.usage.input_known}/${a.usage.model_calls} input usage known`,
+      t9n("Input / output · {known}/{calls} input usage known", { known: a.usage.input_known, calls: a.usage.model_calls }),
     ],
   ]) {
     const c = html("div");
@@ -550,7 +551,7 @@ function renderAnalysis() {
         "strong",
         "",
         k.time_quality === "completion_only"
-          ? "Timing unavailable"
+          ? t9n("Timing unavailable")
           : format(k.union_ms),
       ),
     );
@@ -567,7 +568,9 @@ function renderAnalysis() {
       html(
         "small",
         "",
-        `${format(k.summed_ms)} summed calls${k.incomplete_count ? " · " + k.incomplete_count + " incomplete or completion-only" : ""}`,
+        k.incomplete_count
+          ? t9n("{duration} summed calls · {count} incomplete or completion-only", { duration: format(k.summed_ms), count: k.incomplete_count })
+          : t9n("{duration} summed calls", { duration: format(k.summed_ms) }),
       ),
     );
     breakdown.append(row);
@@ -576,8 +579,8 @@ function renderAnalysis() {
   $("#critical-duration").textContent =
     critical.status === "available"
       ? format(critical.duration_ms)
-      : "Unavailable";
-  $("#critical-reason").textContent = critical.reason || "";
+      : t9n("Unavailable");
+  $("#critical-reason").textContent = t9n(critical.reason || "");
   $("#highlight-critical").disabled = critical.status !== "available";
   const nodes = $("#critical-nodes");
   nodes.replaceChildren();
@@ -592,34 +595,34 @@ function renderAnalysis() {
     const flags = flagText(t);
     return [
       (flags ? "⚠ " : "") + (t.name || t.id),
-      t.status || "unknown",
-      t.end_reason || "—",
-      t.evaluation_status || "unknown",
+      t9n(t.status || "unknown"),
+      t9n(t.end_reason || "—"),
+      t9n(t.evaluation_status || "unknown"),
       score(t.score),
-      t.cleanup_status || "unknown",
+      t9n(t.cleanup_status || "unknown"),
       format(t.duration_ms) + (flags ? ` (${flags})` : ""),
       networkText(t.network),
       c && c.status !== "unavailable"
         ? `${(c.ratio * 100).toFixed(1)}%`
-        : "Unavailable",
+        : t9n("Unavailable"),
       c && c.status !== "unavailable"
         ? format(c.unattributed_ms)
-        : "Unavailable",
+        : t9n("Unavailable"),
     ];
   });
   table(
     $("#coverage-table"),
     [
-      "Task",
-      "Harness",
-      "End reason",
-      "Evaluation",
-      "Accuracy",
-      "Cleanup",
-      "Duration",
-      "Browser network",
-      "Observed work",
-      "Unattributed",
+      t9n("Task"),
+      t9n("Harness"),
+      t9n("End reason"),
+      t9n("Evaluation"),
+      t9n("Accuracy"),
+      t9n("Cleanup"),
+      t9n("Duration"),
+      t9n("Browser network"),
+      t9n("Observed work"),
+      t9n("Unattributed"),
     ],
     rows,
   );
@@ -666,54 +669,54 @@ async function compareRuns() {
         JSON.stringify(r.profile.configuration?.[k]),
     );
     const items = [
-      ["Duration", l.profile.duration_ms, r.profile.duration_ms, format],
+      [t9n("Duration"), l.profile.duration_ms, r.profile.duration_ms, format],
       [
-        "Mean accuracy",
+        t9n("Mean accuracy"),
         l.analysis.score_mean,
         r.analysis.score_mean,
-        (v) => (v == null ? "Unavailable" : v.toFixed(3)),
+        (v) => (v == null ? t9n("Unavailable") : v.toFixed(3)),
       ],
-      ["Task P50", l.analysis.task_p50_ms, r.analysis.task_p50_ms, format],
-      ["Task P95", l.analysis.task_p95_ms, r.analysis.task_p95_ms, format],
+      [t9n("Task P50"), l.analysis.task_p50_ms, r.analysis.task_p50_ms, format],
+      [t9n("Task P95"), l.analysis.task_p95_ms, r.analysis.task_p95_ms, format],
       [
-        "Throughput / s",
+        t9n("Throughput / s"),
         l.analysis.throughput_per_second,
         r.analysis.throughput_per_second,
         (v) => v.toFixed(3),
       ],
       [
-        "Peak concurrency",
+        t9n("Peak concurrency"),
         l.analysis.max_concurrency,
         r.analysis.max_concurrency,
         String,
       ],
       [
-        "Input tokens",
+        t9n("Input tokens"),
         l.analysis.usage.input_tokens,
         r.analysis.usage.input_tokens,
-        (v) => (v == null ? "Unavailable" : v.toLocaleString()),
+        (v) => (v == null ? t9n("Unavailable") : v.toLocaleString()),
       ],
       [
-        "Output tokens",
+        t9n("Output tokens"),
         l.analysis.usage.output_tokens,
         r.analysis.usage.output_tokens,
-        (v) => (v == null ? "Unavailable" : v.toLocaleString()),
+        (v) => (v == null ? t9n("Unavailable") : v.toLocaleString()),
       ],
     ];
     const target = $("#comparison-result");
     table(
       target,
-      ["Metric", l.profile.name || left, r.profile.name || right, "Change"],
+      [t9n("Metric"), l.profile.name || left, r.profile.name || right, t9n("Change")],
       items.map(([name, a, b, format]) => [
         name,
         format(a),
         format(b),
         a == null || b == null
-          ? "Unavailable"
+          ? t9n("Unavailable")
           : a === 0
             ? b === 0
               ? "0%"
-              : "No zero baseline"
+              : t9n("No zero baseline")
             : `${b >= a ? "+" : ""}${(((b - a) / a) * 100).toFixed(1)}%`,
       ]),
     );
@@ -721,31 +724,32 @@ async function compareRuns() {
       "p",
       "comparison-note",
       differences.length
-        ? "Experiment conditions differ: " +
-            differences.join(", ") +
-            ". Changes are descriptive, not a controlled causal comparison."
+        ? t9n(
+            "Experiment conditions differ: {fields}. Changes are descriptive, not a controlled causal comparison.",
+            { fields: differences.join(", ") },
+          )
         : configKeys.size
-          ? "Recorded configuration fields match. Unrecorded conditions and incomplete measurements still limit comparability."
-          : "Configuration metadata is unavailable. Experiment comparability is unknown.",
+          ? t9n("Recorded configuration fields match. Unrecorded conditions and incomplete measurements still limit comparability.")
+          : t9n("Configuration metadata is unavailable. Experiment comparability is unknown."),
     );
     target.prepend(note);
     if (configKeys.size) {
       const section = html("div", "configuration-table");
       table(
         section,
-        ["Condition", "Baseline", "Candidate"],
+        [t9n("Condition"), t9n("Baseline"), t9n("Candidate")],
         [...configKeys].map((k) => [
           k,
-          String(l.profile.configuration?.[k] ?? "Unknown"),
-          String(r.profile.configuration?.[k] ?? "Unknown"),
+          String(l.profile.configuration?.[k] ?? t9n("Unknown")),
+          String(r.profile.configuration?.[k] ?? t9n("Unknown")),
         ]),
       );
       target.append(section);
     }
     const coverage = html("div", "comparison-coverage");
     for (const [label, item] of [
-      ["Baseline", l],
-      ["Candidate", r],
+      [t9n("Baseline"), l],
+      [t9n("Candidate"), r],
     ]) {
       const known = item.analysis.coverage.filter(
         (c) => c.status !== "unavailable",
@@ -757,13 +761,13 @@ async function compareRuns() {
         html(
           "p",
           "",
-          `${label}: ${known.length}/${item.analysis.coverage.length} tasks have usable timing; mean observed-work coverage ${average == null ? "unavailable" : (average * 100).toFixed(1) + "%"}; token input known for ${item.analysis.usage.input_known}/${item.analysis.usage.model_calls} model records.`,
+          t9n("{label}: {known}/{total} tasks have usable timing; mean observed-work coverage {coverage}; token input known for {inputs}/{calls} model records.", { label, known: known.length, total: item.analysis.coverage.length, coverage: average == null ? t9n("unavailable") : (average * 100).toFixed(1) + "%", inputs: item.analysis.usage.input_known, calls: item.analysis.usage.model_calls }),
         ),
       );
     }
     target.append(coverage);
   } catch (e) {
-    notify("Comparison failed: " + e.message);
+    notify(t9n("Comparison failed: {error}", { error: e.message }));
   }
 }
 function setTask(id) {
@@ -801,10 +805,10 @@ function drawDAG(spans) {
   const es = edges().filter((e) => ids.has(e.source) && ids.has(e.target));
   $("#dag-note").textContent =
     state.hiddenEdges > 0
-      ? `${es.length} visible edges · ${state.hiddenEdges} cross this page`
+      ? t9n("{visible} visible edges · {hidden} cross this page", { visible: es.length, hidden: state.hiddenEdges })
       : es.length
-        ? `${es.length} recorded relationship${es.length === 1 ? "" : "s"}`
-        : "No recorded dependencies · isolated spans";
+        ? t9n(es.length === 1 ? "{count} recorded relationship" : "{count} recorded relationships", { count: es.length })
+        : t9n("No recorded dependencies · isolated spans");
   const parents = new Map(),
     adj = new Map(),
     indeg = new Map();
@@ -865,7 +869,7 @@ function drawDAG(spans) {
       node(
         "text",
         { x: 28 + d * 225, y: 20, class: "graph-depth" },
-        d === 0 ? "ROOT / UNLINKED" : `DEPTH ${d}`,
+        d === 0 ? t9n("ROOT / UNLINKED") : t9n("DEPTH {depth}", { depth: d }),
       ),
     );
   for (const e of es) {
@@ -890,7 +894,7 @@ function drawDAG(spans) {
       transform: `translate(${x},${y})`,
       tabindex: 0,
       role: "button",
-      "aria-label": `${s.agent_id || "Agent"}: ${s.name}, ${spanDuration(s)}`,
+      "aria-label": `${s.agent_id || t9n("Agent")}: ${s.name}, ${spanDuration(s)}`,
     });
     g.append(
       node("rect", { width: 190, height: 70, rx: 7 }),
@@ -905,7 +909,7 @@ function drawDAG(spans) {
       node(
         "text",
         { x: 13, y: 17, class: "node-agent" },
-        short(s.agent_id || s.task_id || "Unassigned", 26),
+        short(s.agent_id || s.task_id || t9n("Unassigned"), 26),
       ),
       node("text", { x: 13, y: 35, class: "node-title" }, short(s.name, 28)),
       node(
@@ -950,8 +954,8 @@ function drawTimeline(spans) {
     const key = `${s.task_id || "run"}\0${s.agent_id || "unassigned"}`;
     if (!lanes.has(key))
       lanes.set(key, {
-        name: s.agent_id || "Unassigned lane",
-        task: s.task_id || "Run scope",
+        name: s.agent_id || t9n("Unassigned lane"),
+        task: s.task_id || t9n("Run scope"),
         spans: [],
       });
     lanes.get(key).spans.push(s);
@@ -1051,7 +1055,7 @@ function drawTimeline(spans) {
       node(
         "title",
         {},
-        `${s.name}\n${format(s.start_ms)} → ${format(s.start_ms + s.duration_ms)}\nDuration: ${spanDuration(s)}`,
+        `${s.name}\n${format(s.start_ms)} → ${format(s.start_ms + s.duration_ms)}\n${t9n("Duration: {duration}", { duration: spanDuration(s) })}`,
       ),
     );
     bar.onclick = () => selectSpan(s.id);
@@ -1076,7 +1080,7 @@ function drawTimeline(spans) {
       node(
         "text",
         { x: 30, y: 70, class: "timeline-label" },
-        "No matching execution spans.",
+        t9n("No matching execution spans."),
       ),
     );
   svg.onpointerdown = (event) => {
@@ -1127,7 +1131,7 @@ function drawTimeline(spans) {
     };
   };
   $("#time-window").textContent =
-    `${format(bounds().start)} → ${format(bounds().end)} · ${state.totalSpans} matching spans`;
+    t9n("{start} → {end} · {count} matching spans", { start: format(bounds().start), end: format(bounds().end), count: state.totalSpans });
 }
 function drawResources() {
   const total = bounds().duration;
@@ -1156,17 +1160,17 @@ function drawResources() {
   );
   const rates = net.map((r) => r.network_rate).filter(Number.isFinite);
   $("#network-peak").textContent = rates.length
-    ? `${bytes(maximum(rates))}/s peak`
-    : "Not measured";
+    ? t9n("{value} peak", { value: `${bytes(maximum(rates))}/s` })
+    : t9n("Not measured");
   const gpu = selected.map((r) => r.gpu_percent).filter(Number.isFinite);
   $("#gpu-peak").textContent = gpu.length
-    ? `${maximum(gpu).toFixed(1)}% peak`
-    : "Not measured";
+    ? t9n("{value} peak", { value: `${maximum(gpu).toFixed(1)}%` })
+    : t9n("Not measured");
   const cpu = selected.map((r) => r.cpu_percent).filter(Number.isFinite),
     mem = selected.map((r) => r.memory_bytes).filter(Number.isFinite);
   $("#cpu-peak").textContent = cpu.length
-    ? `${maximum(cpu).toFixed(1)}% peak`
-    : "Not measured";
+    ? t9n("{value} peak", { value: `${maximum(cpu).toFixed(1)}%` })
+    : t9n("Not measured");
   // Percent of the runtime's own memory limit; series without a limit are
   // excluded rather than compared against another runtime's limit.
   const pct = selected
@@ -1175,9 +1179,9 @@ function drawResources() {
     )
     .map((r) => (r.memory_bytes / r.memory_limit_bytes) * 100);
   $("#memory-peak").textContent = mem.length
-    ? `${bytes(maximum(mem))} peak` +
-      (pct.length ? ` · ${maximum(pct).toFixed(1)}% of limit` : "")
-    : "Not measured";
+    ? t9n("{value} peak", { value: bytes(maximum(mem)) }) +
+      (pct.length ? " · " + t9n("{percent} of limit", { percent: `${maximum(pct).toFixed(1)}%` }) : "")
+    : t9n("Not measured");
 }
 // Monitor network counters are cumulative per runtime; rates come from
 // consecutive samples of one series. Counter resets yield no rate.
@@ -1228,7 +1232,7 @@ function drawChart(svg, samples, key, total, tint, axis) {
       node(
         "text",
         { x: w / 2, y: 55, "text-anchor": "middle", class: "chart-axis" },
-        "No measurements available",
+        t9n("No measurements available"),
       ),
     );
     return;
@@ -1347,7 +1351,7 @@ async function selectSpan(id) {
       stats = result.resource_stats || result.window_stats;
     }
   } catch (e) {
-    notify("Span details unavailable: " + e.message);
+    notify(t9n("Span details unavailable: {error}", { error: e.message }));
     return;
   }
   if (!s) return;
@@ -1365,43 +1369,43 @@ async function selectSpan(id) {
   const metric = html(
     "div",
     "detail-metric",
-    durationUnknown ? "Unavailable" : format(s.duration_ms),
+    durationUnknown ? t9n("Unavailable") : format(s.duration_ms),
   );
-  metric.append(html("small", "", s.incomplete ? "in progress" : "duration"));
+  metric.append(html("small", "", s.incomplete ? t9n("in progress") : t9n("duration")));
   content.append(metric);
   const dl = html("dl");
   const task = state.profile.tasks.find((t) => t.id === s.task_id);
   for (const [a, b] of [
-    ["Agent", s.agent_id || "Not recorded"],
-    ["Task", s.task_id || "Run scope"],
-    ["Status", s.status || "Unknown"],
-    ["Time quality", s.attributes?.time_quality || "Recorded interval"],
-    ["Start", format(s.start_ms)],
+    [t9n("Agent"), s.agent_id || t9n("Not recorded")],
+    [t9n("Task"), s.task_id || t9n("Run scope")],
+    [t9n("Status"), t9n(s.status || "Unknown")],
+    [t9n("Time quality"), s.attributes?.time_quality || t9n("Recorded interval")],
+    [t9n("Start"), format(s.start_ms)],
     [
-      "End",
-      s.incomplete ? "Not yet recorded" : format(s.start_ms + s.duration_ms),
+      t9n("End"),
+      s.incomplete ? t9n("Not yet recorded") : format(s.start_ms + s.duration_ms),
     ],
-    ["Source", s.source || "Unspecified"],
-    ["Span ID", s.id],
-    ["Runtime", s.runtime_id || "Not recorded"],
+    [t9n("Source"), s.source || t9n("Unspecified")],
+    [t9n("Span ID"), s.id],
+    [t9n("Runtime"), s.runtime_id || t9n("Not recorded")],
     ...(task
       ? [
-          ["Evaluation", task.evaluation_status || "Unknown"],
+          [t9n("Evaluation"), t9n(task.evaluation_status || "Unknown")],
           [
-            "Accuracy",
+            t9n("Accuracy"),
             Number.isFinite(task.score)
               ? task.score.toFixed(3)
-              : "Not recorded",
+              : t9n("Not recorded"),
           ],
-          ["End reason", task.end_reason || "Not recorded"],
-          ["Cleanup", task.cleanup_status || "Unknown"],
-          ...(task.flags?.length ? [["Evidence flags", flagText(task)]] : []),
+          [t9n("End reason"), t9n(task.end_reason || "Not recorded")],
+          [t9n("Cleanup"), t9n(task.cleanup_status || "Unknown")],
+          ...(task.flags?.length ? [[t9n("Evidence flags"), flagText(task)]] : []),
         ]
       : []),
     ...(s.usage
       ? [
-          ["Input tokens", s.usage.input_tokens ?? "Unavailable"],
-          ["Output tokens", s.usage.output_tokens ?? "Unavailable"],
+          [t9n("Input tokens"), s.usage.input_tokens ?? t9n("Unavailable")],
+          [t9n("Output tokens"), s.usage.output_tokens ?? t9n("Unavailable")],
         ]
       : []),
   ]) {
@@ -1413,7 +1417,7 @@ async function selectSpan(id) {
   if (task?.network) {
     const n = task.network;
     content.append(
-      html("h3", "detail-section-title", "Task browser network"),
+      html("h3", "detail-section-title", t9n("Task browser network")),
     );
     const card = html("div", "window-resource");
     card.append(
@@ -1422,12 +1426,12 @@ async function selectSpan(id) {
         "small",
         "",
         [
-          n.unsent ? `${n.unsent} unsent` : "",
-          n.navigations ? `${n.navigations} navigations` : "",
-          Number.isFinite(n.active_ms) ? `${format(n.active_ms)} active` : "",
+          n.unsent ? t9n("{count} unsent", { count: n.unsent }) : "",
+          n.navigations ? t9n("{count} navigations", { count: n.navigations }) : "",
+          Number.isFinite(n.active_ms) ? t9n("{duration} active", { duration: format(n.active_ms) }) : "",
         ]
           .filter(Boolean)
-          .join(" · ") || "Aggregate counters",
+          .join(" · ") || t9n("Aggregate counters"),
       ),
     );
     const types = Object.entries(n.by_resource_type || {}).sort(
@@ -1445,7 +1449,7 @@ async function selectSpan(id) {
   }
   if (related.length) {
     content.append(
-      html("h3", "detail-section-title", "Recorded relationships"),
+      html("h3", "detail-section-title", t9n("Recorded relationships")),
     );
     for (const e of related) {
       const neighbor = e.source === id ? e.target : e.source;
@@ -1460,11 +1464,11 @@ async function selectSpan(id) {
     }
   }
   content.append(
-    html("h3", "detail-section-title", "Resources during this interval"),
+    html("h3", "detail-section-title", t9n("Resources during this interval")),
   );
   if (!stats?.resources?.length)
     content.append(
-      html("p", "detail-note", "No samples recorded within this interval."),
+      html("p", "detail-note", t9n("No samples recorded within this interval.")),
     );
   else
     for (const r of stats.resources) {
@@ -1474,12 +1478,12 @@ async function selectSpan(id) {
         html(
           "small",
           "",
-          `${r.attribution.replaceAll("_", " ")} · ${r.sample_count} samples`,
+          t9n("{attribution} · {count} samples", { attribution: r.attribution.replaceAll("_", " "), count: r.sample_count }),
         ),
       );
       for (const [key, label, fmt] of [
         ["cpu_percent", "CPU", (v) => v.toFixed(1) + "%"],
-        ["memory_bytes", "Memory", bytes],
+        ["memory_bytes", t9n("Memory"), bytes],
         ["gpu_percent", "GPU", (v) => v.toFixed(1) + "%"],
       ]) {
         const m = r[key];
@@ -1488,7 +1492,7 @@ async function selectSpan(id) {
             html(
               "p",
               "",
-              `${label}: ${fmt(m.min)} – ${fmt(m.max)} · mean ${fmt(m.mean)}`,
+              t9n("{label}: {min} – {max} · mean {mean}", { label, min: fmt(m.min), max: fmt(m.max), mean: fmt(m.mean) }),
             ),
           );
       }
@@ -1498,12 +1502,12 @@ async function selectSpan(id) {
     html(
       "p",
       "detail-note",
-      "Sample statistics describe concurrent runtime or task context, not resource cost caused by this span. Shared/device samples remain separate.",
+      t9n("Sample statistics describe concurrent runtime or task context, not resource cost caused by this span. Shared/device samples remain separate."),
     ),
   );
   if (s.attributes && Object.keys(s.attributes).length) {
     const details = html("details", "detail-attributes");
-    details.append(html("summary", "", "Recorded metadata"));
+    details.append(html("summary", "", t9n("Recorded metadata")));
     for (const [a, b] of Object.entries(s.attributes)) {
       const row = html("div", "detail-row");
       row.append(html("dt", "", a), html("dd", "", String(b)));
@@ -1514,7 +1518,7 @@ async function selectSpan(id) {
   const focus = html(
     "button",
     "button detail-button",
-    "Focus this time interval",
+    t9n("Focus this time interval"),
   );
   focus.disabled = durationUnknown;
   focus.onclick = () => {
@@ -1550,7 +1554,7 @@ function applyRange(start, end) {
     start < 0 ||
     end <= start
   ) {
-    notify("Choose a non-negative time window with end after start.");
+    notify(t9n("Choose a non-negative time window with end after start."));
     return;
   }
   state.rangeStart = start;
@@ -1568,7 +1572,7 @@ for (const b of document.querySelectorAll("[data-view]"))
 $("#run-picker").onchange = async (e) => {
   state.runKey = e.target.value;
   resetFilters();
-  $("#resource-filter").replaceChildren(new Option("All runtimes", "all"));
+  $("#resource-filter").replaceChildren(new Option(t9n("All runtimes"), "all"));
   updateRunPickers();
   await loadView();
 };
@@ -1661,7 +1665,7 @@ $("#import-file").onchange = async (e) => {
   try {
     if (file.size > 32 * 1024 * 1024)
       throw Error(
-        "Profile exceeds browser import limit of 32 MiB. Use --run for a larger source.",
+        t9n("Profile exceeds browser import limit of 32 MiB. Use --run for a larger source."),
       );
     const p = validate(JSON.parse(await file.text()));
     const id = "import-" + Date.now();
@@ -1670,9 +1674,9 @@ $("#import-file").onchange = async (e) => {
     resetFilters();
     updateRunPickers();
     await loadView();
-    notify("Profile imported locally and available for comparison.");
+    notify(t9n("Profile imported locally and available for comparison."));
   } catch (err) {
-    notify("Import failed: " + err.message);
+    notify(t9n("Import failed: {error}", { error: err.message }));
   } finally {
     e.target.value = "";
   }
@@ -1694,10 +1698,10 @@ $("#export-button").onclick = async () => {
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     notify(
-      "Complete profile exported, including spans outside the current page.",
+      t9n("Complete profile exported, including spans outside the current page."),
     );
   } catch (e) {
-    notify("Export failed: " + e.message);
+    notify(t9n("Export failed: {error}", { error: e.message }));
   }
 };
 document.addEventListener("keydown", (e) => {
@@ -1726,7 +1730,7 @@ window.addEventListener("tracex:open-run", async (event) => {
     if (!state.runs.some((run) => run.id === id)) return;
     state.runKey = id;
     resetFilters();
-    $("#resource-filter").replaceChildren(new Option("All runtimes", "all"));
+    $("#resource-filter").replaceChildren(new Option(t9n("All runtimes"), "all"));
     updateRunPickers();
     await loadView();
     connectEvents();
@@ -1734,4 +1738,11 @@ window.addEventListener("tracex:open-run", async (event) => {
     showError(error);
   }
 });
+{
+  const i18n = globalThis.TraceXI18n,
+    picker = $("#language-picker");
+  for (const [code, name] of i18n.languages) picker.add(new Option(name, code));
+  picker.value = i18n.language;
+  picker.onchange = () => i18n.setLanguage(picker.value);
+}
 loadSource();
