@@ -18,7 +18,7 @@ Resource empty labels distinguish a response omitted because of a reported resou
 
 ## Investigation links
 
-View state is stored in the URL fragment: page, source `run_id`, task, span, kind, query, runtime, time window, zoom, visualization, page offset/limit and comparison identities. Stable source IDs allow restoration even when mount order changes. Browser navigation restores the linked view. Only supported pages, view modes, limits and finite nonnegative numeric ranges are accepted.
+View state is stored in the URL fragment: page, source `run_id`, task, span, kind, query, runtime, time window, timeline view window (`vfrom`/`vto`), visualization, DAG offset and comparison identities. Stable source IDs allow restoration even when mount order changes. Browser navigation restores the linked view. Only supported pages, view modes, limits and finite nonnegative numeric ranges are accepted.
 
 Links do not contain profile contents. They require the same source to be available locally. Imported profiles live in browser memory; reimport after refreshing. A missing linked run produces an explicit notice. This release does not persist jobs or imported files.
 
@@ -26,7 +26,7 @@ Links do not contain profile contents. They require the same source to be availa
 
 Profiler search highlights matches and centers the current match in the DAG/timeline scroll area. It preserves surrounding spans, lanes, edges and resource signals. Task, type and time-window controls remain explicit filters. Previous/next buttons and Enter / Shift+Enter cycle matches inside that filtered context. A search with no matches leaves the context visible.
 
-`GET /api/find` returns a bounded locator (match count, match index, span ID and offset within context). The client loads the target's normal context page rather than a page containing only search hits. Browser imports use the same matching and context ordering locally. Large runs retain pagination and cross-page edge warnings; finding a span does not imply the entire run is drawn at once.
+`GET /api/find` returns a bounded locator (match count, match index, span ID and offset within context). The client loads the target's normal context page rather than a page containing only search hits. Browser imports use the same matching and context ordering locally. The timeline is not paginated; the DAG draws the first 500 spans of the window, moves to the slice holding a found span, and warns about edges that cross it.
 
 Verification: a 630-span server fixture finds span 629 at context offset 629 while the target page retains its 129 neighboring spans; JavaScript tests cover the corresponding browser-import behavior and context filters. Browser verification shows searching `plan` retains all 18 demo spans with one highlight; searching `source` retains 18 spans with nine highlights, and Next advances to the second match. `make check` passed with 44 JavaScript tests plus Go, race, vet and build checks.
 

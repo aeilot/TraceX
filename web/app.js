@@ -40,7 +40,9 @@ const state = {
   searchLocate: true,
   selected: null,
   view: "timeline",
-  zoom: 1,
+  // The timeline's view window inside the analysis window; null is all of it.
+  viewStart: null,
+  viewEnd: null,
   runtime: "all",
   imported: false,
   pageOffset: 0,
@@ -91,6 +93,8 @@ function taskDuration(t) {
 }
 function format(ms) {
   if (ms == null || !Number.isFinite(ms)) return "—";
+  if (ms > 0 && ms < 1) return `${Math.round(ms * 1000)} µs`;
+  if (ms > 0 && ms < 10) return `${Number(ms.toFixed(2))} ms`;
   if (ms < 1000) return `${Math.round(ms)} ms`;
   if (ms < 60000) return `${(ms / 1000).toFixed(ms < 10000 ? 2 : 1)} s`;
   if (ms < 3600000)
@@ -268,13 +272,12 @@ function resetFilters() {
   state.searchResult = null;
   state.searchLocate = true;
   state.selected = null;
-  state.zoom = 1;
+  state.viewStart = state.viewEnd = null;
   state.runtime = "all";
   state.pageOffset = 0;
   state.rangeStart = 0;
   state.rangeEnd = null;
   $("#search").value = "";
-  showZoom();
   closeInspector();
 }
 async function loadSource() {
@@ -1301,44 +1304,62 @@ function drawDAG(spans) {
     svg.append(g);
   }
 }
-// The timeline shows every span in the window, not the DAG's page: the server
+// The timeline shows every span in the analysis window, not the DAG's page.
+// Zooming narrows a view window inside it instead of stretching the plot, so
+// the plot always fits the viewport and costs the same at any zoom. The server
 // (or, for browser imports, the same layout in profile.js) packs and merges
-// spans for the current plot width.
+// spans for the visible window and plot width.
+const MIN_VIEW_MS = 1;
 function timelineGeometry() {
-  const labelWidth = 180,
-    baseWidth = Math.max(500, $("#timeline-scroll").clientWidth - labelWidth - 25);
-  return { labelWidth, plotWidth: baseWidth * state.zoom };
+  const labelWidth = 180;
+  return { labelWidth, plotWidth: Math.max(300, $("#timeline-scroll").clientWidth - labelWidth - 25) };
 }
-let timelineTimer, timelineScrollTimer;
-// The visible time range of the timeline, and the range to fetch: one
-// viewport on each side, so a zoomed-in timeline loads only what is near.
-function timelineRanges(b, plotWidth) {
-  const scroller = $("#timeline-scroll"),
-    { labelWidth } = timelineGeometry(),
-    toTime = (px) => b.start + (Math.min(plotWidth, Math.max(0, px)) / plotWidth) * b.duration,
-    left = scroller.scrollLeft - labelWidth,
-    right = left + scroller.clientWidth;
-  return {
-    visible: [toTime(left), toTime(right)],
-    fetch: [toTime(left - scroller.clientWidth), toTime(right + scroller.clientWidth)],
-  };
+function viewBounds() {
+  const b = bounds(),
+    start = Math.min(Math.max(state.viewStart ?? b.start, b.start), b.end),
+    end = Math.min(Math.max(state.viewEnd ?? b.end, start + MIN_VIEW_MS), b.end);
+  return { start, end, duration: Math.max(0.001, end - start) };
 }
+function setView(start, end) {
+  const b = bounds(),
+    duration = Math.min(Math.max(end - start, MIN_VIEW_MS), b.duration);
+  start = Math.min(Math.max(start, b.start), b.end - duration);
+  const full = start <= b.start && start + duration >= b.end,
+    micro = (t) => Math.round(t * 1000) / 1000;
+  state.viewStart = full ? null : micro(start);
+  state.viewEnd = full ? null : micro(start + duration);
+  showZoom();
+  previewTimeline();
+  loadTimeline();
+  window.dispatchEvent(new CustomEvent("tracex:view"));
+}
+// Map the drawn timeline onto the current view at once while the new layout
+// loads: scale and shift the plot content horizontally.
+function previewTimeline() {
+  const content = $("#timeline .timeline-content"),
+    drawn = state.timeline?.view;
+  if (!content || !drawn) return;
+  const { labelWidth, plotWidth } = timelineGeometry(),
+    view = viewBounds(),
+    k = (drawn[1] - drawn[0]) / view.duration,
+    offset = ((drawn[0] - view.start) * plotWidth) / view.duration;
+  content.setAttribute("transform", `translate(${labelWidth + offset},0) scale(${k},1) translate(${-labelWidth},0)`);
+}
+let timelineTimer;
 function loadTimeline() {
   if (!state.profile || $("#timeline-panel").hidden) return;
   const { plotWidth } = timelineGeometry(),
-    b = bounds(),
-    key = [state.runKey, state.revision, state.task, state.kind, b.start, b.end, Math.round(plotWidth)].join("|"),
-    ranges = timelineRanges(b, plotWidth),
-    have = state.timeline?.slice;
-  if (state.timeline && state.timelineKey === key && have[0] <= ranges.visible[0] && have[1] >= ranges.visible[1]) {
-    if (state.timelineDrawn !== key + "|" + have.join("|")) drawTimeline();
-    return;
-  }
-  if (state.timeline) drawTimeline();
+    view = viewBounds(),
+    key = [state.runKey, state.revision, state.task, state.kind, view.start, view.end, Math.round(plotWidth)].join("|");
+  // Redraw only a layout that matches the view; while the view moves, the
+  // previous drawing is transformed instead, and the new layout is fetched
+  // once the gesture pauses.
+  if (state.timeline && state.timelineKey === key) return drawTimeline();
+  previewTimeline();
   clearTimeout(timelineTimer);
-  timelineTimer = setTimeout(() => fetchTimeline(key, b, plotWidth, ranges.fetch), state.timeline ? 120 : 0);
+  timelineTimer = setTimeout(() => fetchTimeline(key, view, plotWidth), state.timeline ? 80 : 0);
 }
-async function fetchTimeline(key, b, plotWidth, slice) {
+async function fetchTimeline(key, view, plotWidth) {
   const request = ++state.timelineRequest;
   try {
     const local = state.imports.get(state.runKey);
@@ -1349,20 +1370,19 @@ async function fetchTimeline(key, b, plotWidth, slice) {
           (s) =>
             (state.task === "all" || s.task_id === state.task) &&
             (state.kind === "all" || s.kind === state.kind) &&
-            s.start_ms <= b.end &&
-            s.start_ms + s.duration_ms >= b.start,
+            s.start_ms <= view.end &&
+            s.start_ms + s.duration_ms >= view.start,
         )
         .sort((x, y) => x.start_ms - y.start_ms);
-      layout = timelineLayout(spans, b.start, b.end, plotWidth);
-      layout.items = layout.items.filter((it) => it.start_ms <= slice[1] && it.start_ms + it.duration_ms >= slice[0]);
+      layout = timelineLayout(spans, view.start, view.end, plotWidth);
     } else {
-      const params = new URLSearchParams({ run: state.runKey, start_ms: b.start, end_ms: b.end, width: Math.round(plotWidth), from_ms: slice[0], to_ms: slice[1] });
+      const params = new URLSearchParams({ run: state.runKey, start_ms: view.start, end_ms: view.end, width: Math.round(plotWidth) });
       if (state.task !== "all") params.set("task", state.task);
       if (state.kind !== "all") params.set("kind", state.kind);
       layout = (await json("/api/timeline?" + params)).layout;
     }
     if (request !== state.timelineRequest) return;
-    state.timeline = { layout, slice };
+    state.timeline = { layout, view: [view.start, view.end] };
     state.timelineKey = key;
     drawTimeline();
   } catch (e) {
@@ -1372,11 +1392,15 @@ async function fetchTimeline(key, b, plotWidth, slice) {
 function drawTimeline() {
   const svg = $("#timeline");
   svg.replaceChildren();
+  // Draw in the view this layout was computed for; previewTimeline maps it
+  // onto the current view if that has moved on since.
   const { labelWidth, plotWidth } = timelineGeometry(),
-    total = bounds().duration;
+    drawn = state.timeline?.view || [viewBounds().start, viewBounds().end],
+    vb = { start: drawn[0], end: drawn[1], duration: Math.max(0.001, drawn[1] - drawn[0]) },
+    total = vb.duration;
   const width = labelWidth + plotWidth + 25;
   const layout = state.timeline?.layout || { lanes: [], items: [], spans: 0 };
-  state.timelineDrawn = state.timelineKey + "|" + (state.timeline?.slice || []).join("|");
+  showZoom();
   $("#timeline-count").textContent = layout.spans.toLocaleString();
   let y = 38;
   const lanes = layout.lanes.map((l) => {
@@ -1394,10 +1418,19 @@ function drawTimeline() {
   svg.setAttribute("width", width);
   svg.setAttribute("height", height);
   svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
-  for (let i = 0; i <= 8 * state.zoom; i++) {
-    const t = (total * i) / (8 * state.zoom),
+  // Grid and bars live in a group clipped to the plot area, so that a preview
+  // transform never covers the lane labels.
+  const clip = node("clipPath", { id: "timeline-clip" });
+  clip.append(node("rect", { x: labelWidth, y: 0, width: plotWidth + 25, height }));
+  const defs = node("defs", {});
+  defs.append(clip);
+  const plot = node("g", { "clip-path": "url(#timeline-clip)" }),
+    content = node("g", { class: "timeline-content" });
+  plot.append(content);
+  for (let i = 0; i <= 8; i++) {
+    const t = (total * i) / 8,
       x = labelWidth + (plotWidth * t) / total;
-    svg.append(
+    content.append(
       node("line", {
         x1: x,
         x2: x,
@@ -1413,7 +1446,9 @@ function drawTimeline() {
           "text-anchor": i === 0 ? "start" : "middle",
           class: "timeline-label",
         },
-        format(t + bounds().start),
+        // A short view labels offsets from its start, which absolute
+        // times at run scale cannot resolve.
+        i === 0 || vb.duration >= 10000 ? format(t + vb.start) : "+" + format(t),
       ),
     );
   }
@@ -1448,7 +1483,7 @@ function drawTimeline() {
   for (const { it, s, y } of rows) {
     if (!s) {
       // A cluster of spans too small to tell apart: zoom in to separate them.
-      const x = labelWidth + ((it.start_ms - bounds().start) / total) * plotWidth,
+      const x = labelWidth + ((it.start_ms - vb.start) / total) * plotWidth,
         w = Math.max(3, (it.duration_ms / total) * plotWidth),
         kinds = Object.entries(it.kinds || {})
           .sort((a, b) => b[1] - a[1])
@@ -1475,7 +1510,7 @@ function drawTimeline() {
       );
       const zoomIn = () => {
         const pad = Math.max(it.duration_ms * 0.25, total / 2000);
-        applyRange(Math.max(0, it.start_ms - pad), it.start_ms + it.duration_ms + pad);
+        setView(it.start_ms - pad, it.start_ms + it.duration_ms + pad);
       };
       block.onclick = zoomIn;
       block.onkeydown = (e) => {
@@ -1484,9 +1519,9 @@ function drawTimeline() {
           zoomIn();
         }
       };
-      svg.append(block);
+      content.append(block);
       if (w > 52)
-        svg.append(
+        content.append(
           node(
             "text",
             { x: x + 7, y: y + 13, class: "timeline-bar-label" },
@@ -1495,10 +1530,10 @@ function drawTimeline() {
         );
       continue;
     }
-    const clippedStart = Math.max(s.start_ms, bounds().start),
-      clippedEnd = Math.min(s.start_ms + s.duration_ms, bounds().end);
+    const clippedStart = Math.max(s.start_ms, vb.start),
+      clippedEnd = Math.min(s.start_ms + s.duration_ms, vb.end);
     const x =
-        labelWidth + ((clippedStart - bounds().start) / total) * plotWidth,
+        labelWidth + ((clippedStart - vb.start) / total) * plotWidth,
       w = Math.max(
         3,
         (Math.max(0, clippedEnd - clippedStart) / total) * plotWidth,
@@ -1530,9 +1565,9 @@ function drawTimeline() {
         selectSpan(s.id);
       }
     };
-    svg.append(bar);
+    content.append(bar);
     if (w > 52)
-      svg.append(
+      content.append(
         node(
           "text",
           { x: x + 7, y: y + 13, class: "timeline-bar-label" },
@@ -1540,6 +1575,8 @@ function drawTimeline() {
         ),
       );
   }
+  svg.prepend(defs);
+  svg.append(plot);
   if (!layout.items.length)
     svg.append(
       node(
@@ -1553,6 +1590,22 @@ function drawTimeline() {
     const rect = svg.getBoundingClientRect();
     const px = event.clientX - rect.left;
     if (px < labelWidth) return;
+    if (!event.shiftKey) {
+      // Drag to pan the view window.
+      const from = viewBounds();
+      svg.setPointerCapture(event.pointerId);
+      svg.classList.add("panning");
+      svg.onpointermove = (move) => {
+        const dt = ((event.clientX - move.clientX) / plotWidth) * from.duration;
+        setView(from.start + dt, from.end + dt);
+      };
+      svg.onpointerup = svg.onpointercancel = (up) => {
+        svg.classList.remove("panning");
+        svg.onpointermove = svg.onpointerup = svg.onpointercancel = null;
+        if (svg.hasPointerCapture(up.pointerId)) svg.releasePointerCapture(up.pointerId);
+      };
+      return;
+    }
     const initial = Math.max(0, Math.min(plotWidth, px - labelWidth));
     const overlay = node("rect", {
       x: initial + labelWidth,
@@ -1585,8 +1638,8 @@ function drawTimeline() {
         svg.releasePointerCapture(up.pointerId);
       if (Math.abs(next - initial) > 8)
         applyRange(
-          bounds().start + (Math.min(initial, next) / plotWidth) * total,
-          bounds().start + (Math.max(initial, next) / plotWidth) * total,
+          vb.start + (Math.min(initial, next) / plotWidth) * total,
+          vb.start + (Math.max(initial, next) / plotWidth) * total,
         );
     };
     svg.onpointercancel = () => {
@@ -1596,7 +1649,8 @@ function drawTimeline() {
     };
   };
   $("#time-window").textContent =
-    t9n("{start} → {end} · {count} matching spans", { start: format(bounds().start), end: format(bounds().end), count: layout.spans.toLocaleString() });
+    t9n("{start} → {end} · {count} matching spans", { start: format(vb.start), end: vb.duration < 10000 ? "+" + format(vb.duration) : format(vb.end), count: layout.spans.toLocaleString() });
+  previewTimeline();
 }
 function drawResources() {
   const total = bounds().duration;
@@ -2053,8 +2107,7 @@ function applyRange(start, end) {
   state.rangeStart = start;
   state.rangeEnd = end;
   state.pageOffset = 0;
-  state.zoom = 1;
-  showZoom();
+  state.viewStart = state.viewEnd = null;
   loadView();
 }
 // Full screen covers the viewport with the explorer. The whole page enters
@@ -2130,34 +2183,47 @@ $("#resource-filter").onchange = (e) => {
   state.runtime = e.target.value;
   loadView();
 };
-// The zoom slider is logarithmic: 0..6 is 1x..64x. Zooming keeps the time at
-// the viewport's center in place.
+// Zoom is the analysis window's duration over the view's; the slider is
+// logarithmic (0..20 is 1x..about 1,000,000x) and zooms about the center.
 function showZoom() {
-  $("#zoom").value = Math.log2(state.zoom);
-  $("#zoom-value").textContent = `×${state.zoom < 10 ? Number(state.zoom.toFixed(1)) : Math.round(state.zoom)}`;
+  if (!state.profile) return;
+  const zoom = bounds().duration / viewBounds().duration;
+  $("#zoom").value = Math.log2(zoom);
+  $("#zoom-value").textContent = `×${zoom < 10 ? Number(zoom.toFixed(1)) : Math.round(zoom).toLocaleString()}`;
 }
 $("#zoom").oninput = (e) => {
-  const scroller = $("#timeline-scroll"),
-    { labelWidth, plotWidth } = timelineGeometry(),
-    center = (scroller.scrollLeft + scroller.clientWidth / 2 - labelWidth) / plotWidth;
-  state.zoom = 2 ** Number(e.target.value);
-  showZoom();
-  const next = timelineGeometry().plotWidth;
-  renderViews();
-  scroller.scrollLeft = Math.max(0, labelWidth + center * next - scroller.clientWidth / 2);
-  // Fetch for the new scroll position now rather than relying on a scroll event.
-  loadTimeline();
+  const view = viewBounds(),
+    center = (view.start + view.end) / 2,
+    duration = bounds().duration / 2 ** Number(e.target.value);
+  setView(center - duration / 2, center + duration / 2);
 };
-$("#timeline-scroll").addEventListener("scroll", () => {
-  clearTimeout(timelineScrollTimer);
-  timelineScrollTimer = setTimeout(loadTimeline, 80);
-});
-$("#reset-time").onclick = () => {
-  state.zoom = 1;
-  showZoom();
-  $("#timeline-scroll").scrollLeft = 0;
-  renderViews();
-};
+// ⌘/Ctrl + wheel (and trackpad pinch) zooms about the pointer; horizontal
+// scrolling or Shift + wheel pans. Plain vertical scrolling scrolls lanes.
+$("#timeline-scroll").addEventListener(
+  "wheel",
+  (e) => {
+    if (!state.profile) return;
+    const { labelWidth, plotWidth } = timelineGeometry(),
+      view = viewBounds(),
+      lines = e.deltaMode === 1 ? 16 : 1;
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      const rect = $("#timeline").getBoundingClientRect(),
+        at = Math.min(1, Math.max(0, (e.clientX - rect.left - labelWidth) / plotWidth)),
+        factor = Math.min(2, Math.max(0.5, Math.exp(e.deltaY * lines * 0.01))),
+        anchor = view.start + at * view.duration,
+        duration = view.duration * factor;
+      setView(anchor - at * duration, anchor - at * duration + duration);
+    } else if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+      e.preventDefault();
+      const dx = (Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY) * lines,
+        dt = (dx / plotWidth) * view.duration;
+      setView(view.start + dt, view.end + dt);
+    }
+  },
+  { passive: false },
+);
+$("#reset-time").onclick = () => setView(-Infinity, Infinity);
 $("#apply-range").onclick = () =>
   applyRange(
     Number($("#range-start").value) * 1000,
@@ -2166,6 +2232,7 @@ $("#apply-range").onclick = () =>
 $("#full-range").onclick = () => {
   state.rangeStart = 0;
   state.rangeEnd = null;
+  state.viewStart = state.viewEnd = null;
   state.pageOffset = 0;
   loadView();
 };

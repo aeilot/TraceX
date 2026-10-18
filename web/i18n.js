@@ -466,6 +466,7 @@
     Apply: "应用",
     "Full run": "整个运行",
     "Drag empty timeline space to select a window": "在时间线空白处拖动即可选择窗口",
+    "Drag to pan · ⌘/Ctrl + scroll to zoom · Shift-drag to select a window": "拖动平移 · ⌘/Ctrl + 滚轮缩放 · 按住 Shift 拖动选择窗口",
     "Agent execution DAG": "Agent 执行 DAG",
     "Select a node to inspect": "选择一个节点查看详情",
     "Fit graph to viewport": "让图适配视口",
