@@ -9,6 +9,7 @@ const {
   throttleShares,
   sweepSamples,
   sweepMetrics,
+  timelineLayout,
 } = globalThis.TraceXProfile;
 const t9n = globalThis.TraceXI18n.t;
 const $ = (s) => document.querySelector(s),
@@ -58,6 +59,9 @@ const state = {
   resourceReturned: 0,
   resourceTotal: 0,
   request: 0,
+  timeline: null,
+  timelineKey: "",
+  timelineRequest: 0,
 };
 let toastTimer, searchTimer;
 function notify(message) {
@@ -568,7 +572,7 @@ function render() {
   $("#range-start").value = Number((b.start / 1000).toFixed(3));
   $("#range-end").value = Number((b.end / 1000).toFixed(3));
   $("#page-label").textContent = state.totalSpans
-    ? t9n("{first}–{last} of {total} matching spans", { first: state.pageOffset + 1, last: Math.min(state.pageOffset + state.pageLimit, state.totalSpans), total: state.totalSpans.toLocaleString() })
+    ? t9n("DAG page") + " · " + t9n("{first}–{last} of {total} matching spans", { first: state.pageOffset + 1, last: Math.min(state.pageOffset + state.pageLimit, state.totalSpans), total: state.totalSpans.toLocaleString() })
     : t9n("No matching spans");
   $("#edge-coverage").textContent = state.hiddenEdges
     ? t9n("{count} relationships cross this page; inspect a node to follow neighbors.", { count: state.hiddenEdges })
@@ -1131,15 +1135,16 @@ function renderViews() {
   if (!state.profile) return;
   const spans = visible();
   $("#dag-count").textContent = spans.length;
-  $("#timeline-count").textContent = spans.length;
   $("#dag-panel").hidden = state.view === "timeline";
   $("#timeline-panel").hidden = state.view === "dag";
+  // Pagination pages the DAG only; the timeline always covers the window.
+  $(".pagination").hidden = state.view === "timeline";
   for (const b of document.querySelectorAll("[data-view]")) {
     b.classList.toggle("selected", b.dataset.view === state.view);
     b.setAttribute("aria-pressed", String(b.dataset.view === state.view));
   }
   drawDAG(spans);
-  drawTimeline(spans);
+  loadTimeline();
   drawResources();
   if (renderedView !== null && renderedView !== state.view) {
     for (const id of ["#dag-panel", "#timeline-panel"])
@@ -1296,43 +1301,75 @@ function drawDAG(spans) {
     svg.append(g);
   }
 }
-function drawTimeline(spans) {
+// The timeline shows every span in the window, not the DAG's page: the server
+// (or, for browser imports, the same layout in profile.js) packs and merges
+// spans for the current plot width.
+function timelineGeometry() {
+  const labelWidth = 180,
+    baseWidth = Math.max(500, $("#timeline-scroll").clientWidth - labelWidth - 25);
+  return { labelWidth, plotWidth: baseWidth * state.zoom };
+}
+let timelineTimer;
+function loadTimeline() {
+  if (!state.profile || $("#timeline-panel").hidden) return;
+  const { plotWidth } = timelineGeometry(),
+    b = bounds(),
+    key = [state.runKey, state.revision, state.task, state.kind, b.start, b.end, Math.round(plotWidth)].join("|");
+  if (state.timeline && state.timelineKey === key) return drawTimeline();
+  if (state.timeline) drawTimeline();
+  clearTimeout(timelineTimer);
+  timelineTimer = setTimeout(() => fetchTimeline(key, b, plotWidth), state.timeline ? 120 : 0);
+}
+async function fetchTimeline(key, b, plotWidth) {
+  const request = ++state.timelineRequest;
+  try {
+    const local = state.imports.get(state.runKey);
+    let layout;
+    if (local) {
+      const spans = local.spans
+        .filter(
+          (s) =>
+            (state.task === "all" || s.task_id === state.task) &&
+            (state.kind === "all" || s.kind === state.kind) &&
+            s.start_ms <= b.end &&
+            s.start_ms + s.duration_ms >= b.start,
+        )
+        .sort((x, y) => x.start_ms - y.start_ms);
+      layout = timelineLayout(spans, b.start, b.end, plotWidth);
+    } else {
+      const params = new URLSearchParams({ run: state.runKey, start_ms: b.start, end_ms: b.end, width: Math.round(plotWidth) });
+      if (state.task !== "all") params.set("task", state.task);
+      if (state.kind !== "all") params.set("kind", state.kind);
+      layout = (await json("/api/timeline?" + params)).layout;
+    }
+    if (request !== state.timelineRequest) return;
+    state.timeline = { layout };
+    state.timelineKey = key;
+    drawTimeline();
+  } catch (e) {
+    if (request === state.timelineRequest) showError(e);
+  }
+}
+function drawTimeline() {
   const svg = $("#timeline");
   svg.replaceChildren();
-  const labelWidth = 180,
-    baseWidth = Math.max(
-      500,
-      $("#timeline-scroll").clientWidth - labelWidth - 25,
-    ),
-    plotWidth = baseWidth * state.zoom,
+  const { labelWidth, plotWidth } = timelineGeometry(),
     total = bounds().duration;
   const width = labelWidth + plotWidth + 25;
-  const lanes = new Map();
-  for (const s of spans) {
-    const key = `${s.task_id || "run"}\0${s.agent_id || "unassigned"}`;
-    if (!lanes.has(key))
-      lanes.set(key, {
-        name: s.agent_id || t9n("Unassigned lane"),
-        task: s.task_id || t9n("Run scope"),
-        spans: [],
-      });
-    lanes.get(key).spans.push(s);
-  }
+  const layout = state.timeline?.layout || { lanes: [], items: [], spans: 0 };
+  $("#timeline-count").textContent = layout.spans.toLocaleString();
   let y = 38;
-  const rows = [];
-  for (const lane of lanes.values()) {
-    const ends = [];
-    lane.spans.sort((a, b) => a.start_ms - b.start_ms);
-    for (const s of lane.spans) {
-      let i = ends.findIndex((end) => end <= s.start_ms);
-      if (i < 0) i = ends.length;
-      ends[i] = s.start_ms + s.duration_ms;
-      rows.push({ s, y: y + i * 27 });
-    }
-    lane.y = y;
-    lane.height = Math.max(1, ends.length) * 27 + 20;
+  const lanes = layout.lanes.map((l) => {
+    const lane = {
+      name: l.name || t9n("Unassigned lane"),
+      task: l.task || t9n("Run scope"),
+      y,
+      height: Math.max(1, l.rows) * 27 + 20,
+    };
     y += lane.height;
-  }
+    return lane;
+  });
+  const rows = layout.items.map((it) => ({ it, s: it.span, y: lanes[it.lane].y + it.row * 27 }));
   const height = Math.max(130, y + 15);
   svg.setAttribute("width", width);
   svg.setAttribute("height", height);
@@ -1388,7 +1425,56 @@ function drawTimeline(spans) {
       }),
     );
   }
-  for (const { s, y } of rows) {
+  for (const { it, s, y } of rows) {
+    if (!s) {
+      // A cluster of spans too small to tell apart: zoom in to separate them.
+      const x = labelWidth + ((it.start_ms - bounds().start) / total) * plotWidth,
+        w = Math.max(3, (it.duration_ms / total) * plotWidth),
+        kinds = Object.entries(it.kinds || {})
+          .sort((a, b) => b[1] - a[1])
+          .map(([k, n]) => `${k} ${n}`)
+          .join(", ");
+      const block = node("rect", {
+        x,
+        y,
+        width: w,
+        height: 20,
+        rx: 3,
+        fill: colors[it.kind] || colors.other,
+        class: "timeline-bar timeline-cluster",
+        tabindex: 0,
+        role: "button",
+        "aria-label": t9n("{count} spans; zoom in to separate them", { count: it.count }),
+      });
+      block.append(
+        node(
+          "title",
+          {},
+          `${t9n("{count} spans", { count: it.count })} · ${kinds}\n${format(it.start_ms)} → ${format(it.start_ms + it.duration_ms)}\n${t9n(it.overflow ? "Concurrent beyond this lane's rows; filter by span type or task to see each" : "Click to zoom in")}`,
+        ),
+      );
+      const zoomIn = () => {
+        const pad = Math.max(it.duration_ms * 0.25, total / 2000);
+        applyRange(Math.max(0, it.start_ms - pad), it.start_ms + it.duration_ms + pad);
+      };
+      block.onclick = zoomIn;
+      block.onkeydown = (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          zoomIn();
+        }
+      };
+      svg.append(block);
+      if (w > 52)
+        svg.append(
+          node(
+            "text",
+            { x: x + 7, y: y + 13, class: "timeline-bar-label" },
+            short(t9n("{count} spans", { count: it.count }), Math.floor((w - 14) / 5.4)),
+          ),
+        );
+      continue;
+    }
     const clippedStart = Math.max(s.start_ms, bounds().start),
       clippedEnd = Math.min(s.start_ms + s.duration_ms, bounds().end);
     const x =
@@ -1434,7 +1520,7 @@ function drawTimeline(spans) {
         ),
       );
   }
-  if (!spans.length)
+  if (!layout.items.length)
     svg.append(
       node(
         "text",
@@ -1490,7 +1576,7 @@ function drawTimeline(spans) {
     };
   };
   $("#time-window").textContent =
-    t9n("{start} → {end} · {count} matching spans", { start: format(bounds().start), end: format(bounds().end), count: state.totalSpans });
+    t9n("{start} → {end} · {count} matching spans", { start: format(bounds().start), end: format(bounds().end), count: layout.spans.toLocaleString() });
 }
 function drawResources() {
   const total = bounds().duration;

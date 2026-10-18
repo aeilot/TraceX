@@ -813,7 +813,67 @@
       throttled_share: shares.length ? shares.reduce((a, b) => a + b, 0) / shares.length : null,
     };
   }
+  // Port of profile.LayoutTimeline for browser imports: pack spans (sorted by
+  // start) into task × agent lanes and rows, then merge, row by row, narrow
+  // adjacent bars that cannot be told apart at `width` pixels. A span wide
+  // enough to draw is always its own bar.
+  function timelineLayout(spans, start, end, width) {
+    const out = { lanes: [], items: [], spans: spans.length };
+    if (!(end > start) || !(width > 0)) return out;
+    const px = width / (end - start),
+      minBar = 2,
+      mergeGap = 1,
+      maxRows = 12,
+      laneIndex = new Map(),
+      rowEnds = [],
+      lastInRow = new Map();
+    for (const s of spans) {
+      const key = `${s.task_id || ""}\0${s.agent_id || ""}`;
+      let lane = laneIndex.get(key);
+      if (lane === undefined) {
+        lane = out.lanes.length;
+        laneIndex.set(key, lane);
+        out.lanes.push({ name: s.agent_id || "", task: s.task_id || "", rows: 0 });
+        rowEnds.push([]);
+      }
+      const ends = rowEnds[lane];
+      let row = ends.findIndex((e, r) => r < maxRows - 1 && e <= s.start_ms);
+      if (row < 0) row = Math.min(ends.length, maxRows - 1);
+      const overflow = row === maxRows - 1;
+      ends[row] = Math.max(ends[row] ?? 0, s.start_ms + s.duration_ms);
+      out.lanes[lane].rows = Math.max(out.lanes[lane].rows, ends.length);
+      const clipStart = Math.max(s.start_ms, start),
+        clipEnd = Math.max(clipStart, Math.min(s.start_ms + s.duration_ms, end)),
+        cell = `${lane}\0${row}`,
+        last = lastInRow.get(cell);
+      if (last) {
+        const lastEnd = last.start_ms + last.duration_ms,
+          narrow =
+            (clipEnd - clipStart) * px < minBar &&
+            (!last.span || last.duration_ms * px < minBar);
+        if ((clipStart - lastEnd) * px < mergeGap && (narrow || overflow)) {
+          if (last.span) {
+            last.kinds = { [last.span.kind]: 1 };
+            delete last.span;
+          }
+          last.count++;
+          last.kinds[s.kind] = (last.kinds[s.kind] || 0) + 1;
+          if (overflow) last.overflow = true;
+          last.duration_ms = Math.max(lastEnd, clipEnd) - last.start_ms;
+          last.kind = Object.keys(last.kinds)
+            .sort()
+            .reduce((a, k) => (a === null || last.kinds[k] > last.kinds[a] ? k : a), null);
+          continue;
+        }
+      }
+      const item = { lane, row, start_ms: clipStart, duration_ms: clipEnd - clipStart, kind: s.kind, span: s, count: 1 };
+      out.items.push(item);
+      lastInRow.set(cell, item);
+    }
+    return out;
+  }
   const api = Object.freeze({
+    timelineLayout,
     throttleShares,
     sweepSamples,
     sweepMetrics,

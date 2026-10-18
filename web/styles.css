@@ -1780,3 +1780,11 @@ body.inspecting .workspace {
     padding: 5px 3px;
   }
 }
+
+/* A cluster stands for several spans too small to separate at this zoom. */
+.timeline-cluster {
+  opacity: 0.6;
+  stroke: #ffffffaa;
+  stroke-dasharray: 3 2;
+  cursor: zoom-in;
+}

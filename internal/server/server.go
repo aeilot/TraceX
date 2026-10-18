@@ -44,7 +44,7 @@ func (ws *workspace) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			ws.runs(w, r)
 		case "/api/events":
 			ws.events(w, r)
-		case "/api/profile", "/api/view", "/api/span", "/api/analysis", "/api/sweep", "/api/find", "/api/insights":
+		case "/api/profile", "/api/view", "/api/timeline", "/api/span", "/api/analysis", "/api/sweep", "/api/find", "/api/insights":
 			ws.query(w, r)
 		default:
 			ws.fail(w, r, http.StatusNotFound, "unknown API route")

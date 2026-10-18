@@ -215,3 +215,53 @@ test("suspended sandbox intervals are reported but never counted as work", () =>
   const coverage = a.coverage.find((c) => c.task_id === "t");
   assert.equal(coverage.observed_ms, 30, "only the tool call is observed work");
 });
+test("timeline layout matches the server: narrow neighbors merge, resolvable spans stay", () => {
+  const { timelineLayout } = require("./profile.js");
+  const sp = (id, task, kind, start, duration) => ({ id, task_id: task, kind, name: id, start_ms: start, duration_ms: duration });
+  // Same case as TestLayoutTimelineMergesOnlyIndistinguishableNeighbors: 10 ms per pixel.
+  const l = timelineLayout(
+    [
+      sp("wide-a", "t1", "model", 0, 300),
+      sp("tiny-1", "t1", "tool", 300, 5),
+      sp("tiny-2", "t1", "browser", 306, 5),
+      sp("tiny-3", "t1", "tool", 312, 5),
+      sp("wide-b", "t1", "model", 600, 200),
+      sp("nested", "t1", "tool", 650, 50),
+      sp("other", "t2", "model", 0, 1000),
+    ],
+    0,
+    1000,
+    100,
+  );
+  assert.equal(l.spans, 7);
+  assert.deepEqual(l.lanes.map((x) => x.rows), [2, 1]);
+  assert.equal(l.items.length, 5);
+  const at = (lane, start) => l.items.find((x) => x.lane === lane && x.start_ms === start);
+  assert.equal(at(0, 0).span.id, "wide-a");
+  const c = at(0, 300);
+  assert.equal(c.span, undefined);
+  assert.equal(c.count, 3);
+  assert.equal(c.kind, "tool");
+  assert.equal(c.duration_ms, 17);
+  assert.deepEqual(c.kinds, { tool: 2, browser: 1 });
+  assert.equal(at(0, 650).row, 1);
+  assert.equal(at(1, 0).span.id, "other");
+  // 10,000 tiny spans in one row collapse into one cluster; zoomed in they separate.
+  const many = Array.from({ length: 10000 }, (_, i) => sp("s" + i, "t", "tool", i, 0.5));
+  const collapsed = timelineLayout(many, 0, 10000, 200);
+  assert.equal(collapsed.items.length, 1);
+  assert.equal(collapsed.items[0].count, 10000);
+  assert.equal(timelineLayout(many.slice(0, 3), 0, 3, 1000).items.length, 3);
+});
+test("timeline layout bounds lane rows with an overflow row, like the server", () => {
+  const { timelineLayout } = require("./profile.js");
+  const spans = Array.from({ length: 30 }, (_, i) => ({ id: "c" + i, task_id: "t", kind: "browser", name: "c", start_ms: i, duration_ms: 500 }));
+  const l = timelineLayout(spans, 0, 1000, 100);
+  assert.equal(l.lanes[0].rows, 12);
+  const overflow = l.items.filter((x) => !x.span);
+  assert.equal(l.items.length - overflow.length, 11);
+  assert.equal(overflow.length, 1);
+  assert.equal(overflow[0].count, 19);
+  assert.equal(overflow[0].overflow, true);
+  assert.equal(overflow[0].row, 11);
+});
