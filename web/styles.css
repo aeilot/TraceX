@@ -439,6 +439,38 @@ h2 {
   gap: 10px;
   border-bottom: 1px solid #edf0eb;
 }
+.view-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+/* Full-screen explorer: the page enters full screen and the explorer covers
+   the viewport, so the span inspector (z-index 30) and toasts stay on top. */
+body.explorer-fullscreen {
+  overflow: hidden;
+}
+body.explorer-fullscreen .explorer {
+  position: fixed;
+  inset: 0;
+  z-index: 25;
+  display: flex;
+  flex-direction: column;
+  border: 0;
+  border-radius: 0;
+}
+body.explorer-fullscreen .explorer > .visual-panel:not([hidden]) {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+body.explorer-fullscreen .dag-scroll,
+body.explorer-fullscreen .timeline-scroll {
+  flex: 1 1 auto;
+  height: auto;
+  max-height: none;
+  min-height: 0;
+}
 .view-tabs {
   display: flex;
   background: #f2f5ef;

@@ -1951,6 +1951,45 @@ function applyRange(start, end) {
   $("#zoom").value = 1;
   loadView();
 }
+// Full screen covers the viewport with the explorer. The whole page enters
+// browser full screen so that the inspector and toasts, which live outside
+// the explorer, remain visible; without the Fullscreen API it maximizes
+// within the window.
+function setExplorerFullscreen(on) {
+  document.body.classList.toggle("explorer-fullscreen", on);
+  const b = $("#explorer-fullscreen");
+  b.setAttribute("aria-pressed", String(on));
+  b.textContent = t9n(on ? "⤡ Exit full screen" : "⤢ Full screen");
+  requestAnimationFrame(renderViews);
+}
+const explorerFullscreen = () =>
+  document.body.classList.contains("explorer-fullscreen");
+$("#explorer-fullscreen").onclick = async () => {
+  if (!explorerFullscreen()) {
+    setExplorerFullscreen(true);
+    try {
+      await document.documentElement.requestFullscreen?.();
+    } catch {
+      // Denied or unsupported: stay maximized within the window.
+    }
+  } else {
+    if (document.fullscreenElement)
+      await document.exitFullscreen().catch(() => {});
+    setExplorerFullscreen(false);
+  }
+};
+document.addEventListener("fullscreenchange", () => {
+  if (!document.fullscreenElement && explorerFullscreen())
+    setExplorerFullscreen(false);
+});
+// Workspace navigation uses the History API, not hash changes; leave full
+// screen whenever another page replaces the profiler.
+window.addEventListener("tracex:navigated", (event) => {
+  if (event.detail?.page !== "profiler" && explorerFullscreen()) {
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    setExplorerFullscreen(false);
+  }
+});
 for (const b of document.querySelectorAll("[data-view]"))
   b.onclick = () => {
     state.view = b.dataset.view;
@@ -2100,6 +2139,10 @@ $("#export-button").onclick = async () => {
   }
 };
 document.addEventListener("keydown", (e) => {
+  // Esc closes an open inspector first; otherwise it leaves a full-screen
+  // explorer that the browser is not already exiting.
+  if (e.key === "Escape" && $("#inspector").hidden && explorerFullscreen() && !document.fullscreenElement)
+    setExplorerFullscreen(false);
   if (e.key === "Escape") closeInspector();
   if (
     e.key === "/" &&
