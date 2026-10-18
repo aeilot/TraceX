@@ -105,6 +105,12 @@ type nativeTask struct {
 		Status string `json:"status"`
 	} `json:"cleanup"`
 }
+
+// liveTask holds one occurrence's lifecycle log times before run-result.json exists.
+type liveTask struct {
+	started, finished            int64
+	harness, evaluation, cleanup string
+}
 type nativeRun struct {
 	RunID    string       `json:"run_id"`
 	Name     string       `json:"name"`
@@ -132,6 +138,10 @@ func loadARIES(root string, cache *recordCache) (Profile, error) {
 	b, err := readBounded(filepath.Join(root, "run-result.json"))
 	var run nativeRun
 	live := false
+	// latestEvidence is the newest absolute time any live evidence records;
+	// a running task's duration extends to it rather than to the reader's clock.
+	latestEvidence := int64(0)
+	running := map[string]bool{}
 	if errors.Is(err, os.ErrNotExist) {
 		live = true
 		entries, e := os.ReadDir(root)
@@ -152,16 +162,37 @@ func loadARIES(root string, cache *recordCache) (Profile, error) {
 			}
 		}
 		// Task identity in lifecycle logs is evidence even before an artifact
-		// directory exists. Do not infer final outcomes from log text.
+		// directory exists. Start and finish times come from the same log;
+		// outcomes come only from the structured statuses of "task finished".
+		times := map[string]*liveTask{}
 		if _, _, e := readRecords(filepath.Join(root, "aries.log"), func(v map[string]any, _ int) {
-			switch text(v["msg"]) {
+			msg := text(v["msg"])
+			switch msg {
 			case "task started", "task finished", "task phase":
 			default:
 				return
 			}
+			at := timestamp(v["time"])
+			if at > latestEvidence {
+				latestEvidence = at
+			}
 			id := text(v["task_id"])
 			if id != "" && id != "." && id != ".." && filepath.Base(id) == id && !strings.ContainsAny(id, "/\\") {
 				ids[id] = true
+				if msg == "task phase" || at <= 0 {
+					return
+				}
+				lt := times[id]
+				if lt == nil {
+					lt = &liveTask{}
+					times[id] = lt
+				}
+				if msg == "task started" {
+					lt.started = at
+				} else {
+					lt.finished = at
+					lt.harness, lt.evaluation, lt.cleanup = text(v["harness_status"]), text(v["evaluation_status"]), text(v["cleanup_status"])
+				}
 			}
 		}); e != nil && !errors.Is(e, os.ErrNotExist) {
 			return Profile{}, e
@@ -172,7 +203,19 @@ func loadARIES(root string, cache *recordCache) (Profile, error) {
 		}
 		sort.Strings(names)
 		for _, id := range names {
-			run.Tasks = append(run.Tasks, nativeTask{TaskID: id})
+			t := nativeTask{TaskID: id}
+			if lt := times[id]; lt != nil && lt.started > 0 {
+				t.StartedAt = time.Unix(0, lt.started)
+				if lt.finished >= lt.started {
+					t.Duration = lt.finished - lt.started
+					t.Harness.Status, t.Evaluation.Status, t.Cleanup.Status = lt.harness, lt.evaluation, lt.cleanup
+				} else {
+					// Still running: its duration grows with the latest evidence.
+					t.Harness.Status = "running"
+					running[id] = true
+				}
+			}
+			run.Tasks = append(run.Tasks, t)
 		}
 
 	} else if err != nil {
@@ -530,6 +573,9 @@ func loadARIES(root string, cache *recordCache) (Profile, error) {
 				}
 				resources = append(resources, timedResource{r, at})
 				observe(at)
+				if at > latestEvidence {
+					latestEvidence = at
+				}
 			}
 		})
 		invalid += bad
@@ -576,7 +622,18 @@ func loadARIES(root string, cache *recordCache) (Profile, error) {
 		}
 		if !t.StartedAt.IsZero() {
 			p.Tasks[i].TimeQuality = "measured"
-			spans = append(spans, timedSpan{span: Span{ID: p.Tasks[i].ID + "/lifecycle/task", TaskID: p.Tasks[i].ID, Name: "Task lifecycle", Kind: "lifecycle", Status: p.Tasks[i].Status, DurationMS: p.Tasks[i].DurationMS, Source: "ARIES task result", Attributes: map[string]any{"phase": "task"}}, start: t.StartedAt.UnixNano(), end: t.StartedAt.UnixNano() + t.Duration})
+			source := "ARIES task result"
+			if live {
+				source = "ARIES lifecycle log"
+			}
+			incomplete := running[t.TaskID]
+			if incomplete {
+				// An open task: elapsed so far, not a measured duration.
+				t.Duration = max(0, latestEvidence-t.StartedAt.UnixNano())
+				p.Tasks[i].DurationMS = float64(t.Duration) / 1e6
+				p.Tasks[i].TimeQuality = "open"
+			}
+			spans = append(spans, timedSpan{span: Span{ID: p.Tasks[i].ID + "/lifecycle/task", TaskID: p.Tasks[i].ID, Name: "Task lifecycle", Kind: "lifecycle", Status: p.Tasks[i].Status, DurationMS: p.Tasks[i].DurationMS, Source: source, Incomplete: incomplete, Attributes: map[string]any{"phase": "task"}}, start: t.StartedAt.UnixNano(), end: t.StartedAt.UnixNano() + t.Duration})
 			p.Tasks[i].StartMS = float64(t.StartedAt.UnixNano()-origin) / 1e6
 		}
 		p.DurationMS = max(p.DurationMS, p.Tasks[i].StartMS+p.Tasks[i].DurationMS)

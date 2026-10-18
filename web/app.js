@@ -78,6 +78,12 @@ function html(tag, cls, text) {
   if (text !== undefined) e.textContent = text;
   return e;
 }
+// A running task's duration is elapsed time so far, not a measured result.
+function taskDuration(t) {
+  return t.time_quality === "open"
+    ? t9n("{elapsed} so far", { elapsed: format(t.duration_ms) })
+    : format(t.duration_ms);
+}
 function format(ms) {
   if (ms == null || !Number.isFinite(ms)) return "—";
   if (ms < 1000) return `${Math.round(ms)} ms`;
@@ -486,7 +492,7 @@ function render() {
       sc.style.setProperty("--score", t.score);
       b.append(sc);
     }
-    b.append(html("span", "task-duration", format(t.duration_ms)));
+    b.append(html("span", "task-duration", taskDuration(t)));
     b.onclick = () => setTask(t.id);
     list.append(b);
   }
@@ -679,7 +685,7 @@ function renderAnalysis() {
       t9n(t.evaluation_status || "unknown"),
       score(t.score),
       t9n(t.cleanup_status || "unknown"),
-      format(t.duration_ms) + (flags ? ` (${flags})` : ""),
+      taskDuration(t) + (flags ? ` (${flags})` : ""),
       networkText(t.network),
       c && c.status !== "unavailable"
         ? `${(c.ratio * 100).toFixed(1)}%`

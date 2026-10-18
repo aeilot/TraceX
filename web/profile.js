@@ -477,7 +477,7 @@
       }
     }
     const coverage = p.tasks.map((t) => {
-      if (["unknown", "completion_only"].includes(t.time_quality))
+      if (["unknown", "completion_only", "open"].includes(t.time_quality))
         return {
           task_id: t.id,
           status: "unavailable",

@@ -215,7 +215,7 @@ func Analyze(p Profile) Analysis {
 		if t.DurationMS > 0 {
 			c.Ratio = observed / t.DurationMS
 		}
-		if t.TimeQuality == "unknown" || t.TimeQuality == "completion_only" {
+		if t.TimeQuality == "unknown" || t.TimeQuality == "completion_only" || t.TimeQuality == "open" {
 			c.Status = "unavailable"
 			c.ObservedMS = 0
 			c.UnattributedMS = 0

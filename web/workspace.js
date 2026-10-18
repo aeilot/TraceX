@@ -140,7 +140,7 @@
     table("#task-results", ["Task", "Status", "Duration", "Task accuracy", "Task evaluation", "Action"], tasks.map(t => {
       const name = html("div", "record-identity"); name.append(html("strong", "", t.name || t.id));
       if (t.name && t.name !== t.id) name.append(html("small", "", t.id));
-      return [name, t9n(t.status || "Unknown"), format(t.duration_ms), Number.isFinite(t.score) ? t.score.toFixed(3) : "—",
+      return [name, t9n(t.status || "Unknown"), taskDuration(t), Number.isFinite(t.score) ? t.score.toFixed(3) : "—",
         t9n(t.evaluation_status || "Unknown"), button("Inspect task", () => { navigate("profiler"); resetFilters(); setTask(t.id); })];
     }));
     table("#run-configuration", ["Condition", "Recorded value"], Object.entries(state.profile?.configuration || {}).map(([k,v]) => [k, String(v)]));

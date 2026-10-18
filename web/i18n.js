@@ -677,6 +677,7 @@
     canceled: "已取消",
     completed: "已完成",
     running: "运行中",
+    "{elapsed} so far": "已运行 {elapsed}",
     pending: "等待中",
     unknown: "未知",
     partial: "部分",
