@@ -1,8 +1,18 @@
 # Run ARIES experiments
 
-TraceX can launch the real ARIES CLI as well as inspect existing evidence. Execution is opt-in: without `--aries-dir`, the experiment panel explains how to configure a runner and cannot start processes.
+TraceX can launch the real ARIES CLI as well as inspect existing evidence. Execution is opt-in: save an execution target in the experiment panel or provide `--aries-dir` before starting processes.
 
 ## Configure a runner
+
+Start TraceX with `make run`, open **New experiment → ARIES runner settings**, and choose **Discover directories & machines**. Discovery checks the current checkout, its sibling `ARIES` directory, `ARIES_DIR`, and conventional `~/Developer` locations. You can also enter an absolute path manually. Discovery lists existing OrbStack machines with a three-second timeout; it does not create machines or clone repositories.
+
+Choose local Linux or an OrbStack Linux machine, optionally override the binary path, and **Save runner settings**. The catalog updates immediately without restarting TraceX. **Check execution host** checks Linux, binary accessibility, Docker CLI connectivity, and the presence of credential variables referenced by the catalog. It reports each check separately without returning command output or credential values. These checks do not test datasets, image availability, model endpoints, custom Docker sockets, or ARIES credential-file fallback. Build ARIES on the execution host if its binary is missing.
+
+The CLI saves UI settings to `.cache/tracex/runner.json` with private permissions and reloads them on the next start from the same working directory. Use `--runner-config PATH` to choose another file, or `--runner-config ''` for session-only UI configuration. Explicit `--aries-dir` options take precedence at startup. Changes are rejected while an experiment owns the runner, and completed job history remains available after changing the target. UI configuration requires a loopback connection and a loopback HTTP host. When UI configuration is enabled, watching remains active even with `--watch 0`.
+
+For external-runtime profiles, **Model configuration** lets you override model ID, endpoint, credential environment-variable name, and reasoning effort for the submitted job. The current runtime backend and all other profile settings are retained. Overrides are written only to the private job copy; source profiles are unchanged and overrides reset when choosing a profile. Credential values must already be available to the execution host. Managed model-runtime profiles continue to use their own configuration.
+
+You can also configure the runner at startup:
 
 On a Linux host with a built ARIES checkout:
 
@@ -17,7 +27,7 @@ On macOS, use an existing OrbStack Linux machine with the checkout shared into i
   --aries-executor orb --aries-machine aries-vm
 ```
 
-Build ARIES and configure its Docker, workload prerequisites, model credentials and backend on that execution host first. TraceX does not create machines, provision GPUs, replace ARIES profiles, or infer credentials. The default executable is `ARIES_DIR/bin/aries`; `--aries-bin` overrides it. Orb uses the shared `/mnt/mac` mount and the selected machine's execution environment. The catalog checks binary availability and host compatibility; readiness does not assert that Docker, datasets, credentials, or the model endpoint are healthy.
+Build ARIES and configure its Docker, model credentials and backend on that execution host first. Workload prerequisites can be prepared from the panel. TraceX does not create machines, provision GPUs, replace ARIES profiles, or infer credentials. The default executable is `ARIES_DIR/bin/aries`; `--aries-bin` overrides it. Orb uses the shared `/mnt/mac` mount and the selected machine's execution environment. The catalog checks binary availability and host compatibility; readiness does not assert that Docker, datasets, credentials, or the model endpoint are healthy.
 
 ## Select and start
 
@@ -25,7 +35,7 @@ Open **New experiment**, filter by workload, and choose a profile. Each preset i
 
 **Prepare workload** invokes `aries setup PROFILE.json`: this may download datasets or build images, but does not run the model benchmark. **Run experiment** invokes `aries PROFILE.json` and requires the model-call acknowledgment for each submission. It can incur provider charges and consume local compute. Opening the panel or selecting a profile never starts a process.
 
-The server validates the selection again, allows one active job, and never automatically retries a start. It copies the selected configuration into a private job directory, preserves profile-relative configuration paths, and overrides only selected tasks, concurrency and the output location. The original profile is unchanged. Private copies and logs can contain sensitive configuration; they are not returned by the HTTP API.
+The server validates the selection again, allows one active job, and never automatically retries a start. It copies the selected configuration into a private job directory, preserves profile-relative configuration paths, and overrides selected tasks, concurrency, the output location, and any explicitly submitted external-model settings. The original profile is unchanged. Private copies and logs can contain sensitive configuration; they are not returned by the HTTP API.
 
 ## Observe and stop
 

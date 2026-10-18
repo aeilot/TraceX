@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +18,17 @@ import (
 const maxProfileBytes = 2 << 20
 
 func New(ctx context.Context, c Config) (*Manager, error) {
+	m, err := configured(c)
+	if err != nil {
+		return nil, err
+	}
+	watch, cancel := context.WithCancel(ctx)
+	m.cancel = cancel
+	go func() { <-watch.Done(); _ = m.Close(context.Background()) }()
+	return m, nil
+}
+
+func configured(c Config) (*Manager, error) {
 	m := &Manager{cfg: c}
 	m.catalog = Catalog{Profiles: []Preset{}, Executor: c.Executor, Machine: c.Machine}
 	if c.Root == "" {
@@ -116,9 +128,6 @@ func New(ctx context.Context, c Config) (*Manager, error) {
 	if e != nil {
 		return nil, e
 	}
-	watch, cancel := context.WithCancel(ctx)
-	m.cancel = cancel
-	go func() { <-watch.Done(); _ = m.Close(context.Background()) }()
 	return m, nil
 }
 func readProfile(path string) (map[string]any, error) {
@@ -157,11 +166,18 @@ func tasks(raw map[string]any) []string {
 }
 func arr(v any) []any { a, _ := v.([]any); return a }
 func preset(id string, raw map[string]any) Preset {
+	model := obj(raw, "model")
+	settings := ModelSettings{ID: str(model, "id"), BaseURL: str(model, "base_url"), APIKeyEnv: str(model, "api_key_env"), ReasoningEffort: str(model, "reasoning_effort")}
+	// Display only endpoint identity, never URL credentials or query parameters.
+	if u, err := url.Parse(settings.BaseURL); err != nil || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		settings.BaseURL = ""
+	}
+
 	c, _ := obj(raw, "execution")["concurrency"].(float64)
 	if c == 0 {
 		c = 1
 	}
-	return Preset{ID: id, Name: str(raw, "name"), Workload: str(obj(raw, "benchmark"), "type"), Harness: str(obj(raw, "harness"), "type"), Model: str(obj(raw, "model"), "id"), Backend: str(obj(raw, "runtime"), "backend"), Tasks: tasks(raw), Concurrency: int(c), LoopDuration: str(obj(raw, "execution"), "loop_duration"), ArrivalSchedule: str(obj(raw, "execution"), "arrivals_file") != ""}
+	return Preset{ModelSettings: settings, ModelEditable: str(obj(raw, "runtime"), "mode") == "external", ID: id, Name: str(raw, "name"), Workload: str(obj(raw, "benchmark"), "type"), Harness: str(obj(raw, "harness"), "type"), Model: str(obj(raw, "model"), "id"), Backend: str(obj(raw, "runtime"), "backend"), Tasks: tasks(raw), Concurrency: int(c), LoopDuration: str(obj(raw, "execution"), "loop_duration"), ArrivalSchedule: str(obj(raw, "execution"), "arrivals_file") != ""}
 }
 func (m *Manager) Catalog() Catalog {
 	m.mu.Lock()

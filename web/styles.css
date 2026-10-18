@@ -1038,9 +1038,6 @@ body.inspecting .workspace {
   .page-heading {
     align-items: flex-start;
   }
-  .export {
-    margin-top: 22px;
-  }
   main {
     padding: 24px 18px;
   }

@@ -14,7 +14,7 @@ test("translations keep every placeholder", () => {
 });
 
 test("every t9n literal in the interface scripts is translated", () => {
-  for (const name of ["app.js", "experiments.js"]) {
+  for (const name of ["app.js", "experiments.js", "workspace.js", "insights.js"]) {
     const literals = [...read(name).matchAll(/t9n\(\s*(["'])((?:(?!\1)[^\\]|\\.)*)\1/g)].map((m) => m[2]);
     assert.ok(literals.length > 0, name);
     for (const text of literals) assert.ok(Object.hasOwn(zh, text), `${name}: ${text}`);

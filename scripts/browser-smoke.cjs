@@ -4,12 +4,17 @@ async function smoke(page, baseURL = "http://127.0.0.1:4318") {
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto(baseURL);
+  await page.waitForSelector("#experiment-library tbody tr");
+  await page.locator('#overview').click();
+  await page.locator('[data-view="split"]').click();
   await page.waitForSelector(".dag-node");
   assert.equal(await page.locator("#run-picker option").count(), 2);
   assert.equal(await page.locator(".dag-node").count(), 18);
   assert.equal(await page.locator(".edge-join").count(), 3);
+  await page.locator('[data-page="summary"]').click();
   await page.locator("#highlight-critical").click();
   assert.ok((await page.locator(".dag-node.critical").count()) > 2);
+  await page.locator('#overview').click();
   await page.locator('.dag-node[aria-label*="Plan evidence"]').click();
   await page.waitForSelector("#inspector:not([hidden])");
   assert.match(
@@ -36,8 +41,9 @@ async function smoke(page, baseURL = "http://127.0.0.1:4318") {
   );
   await page.locator("#search").fill("researcher-b");
   await page.waitForFunction(
-    () => document.querySelectorAll(".timeline-bar").length === 4,
+    () => document.querySelectorAll(".timeline-bar.search-match").length === 4,
   );
+  assert.equal(await page.locator(".timeline-bar").count(),18,"find must retain surrounding execution");
   await page.locator("#search").fill("");
   await page.locator("#kind-filter").selectOption("lifecycle");
   await page.waitForFunction(
@@ -47,7 +53,7 @@ async function smoke(page, baseURL = "http://127.0.0.1:4318") {
   await page.waitForFunction(
     () => document.querySelectorAll(".timeline-bar").length === 18,
   );
-  await page.locator("#comparison-details summary").click();
+  await page.locator('.workspace-navigation [data-page="compare"]').click();
   await page.locator("#compare-left").selectOption("run-1");
   await page.locator("#compare-right").selectOption("run-2");
   await page.locator("#compare-button").click();
@@ -95,7 +101,7 @@ async function smoke(page, baseURL = "http://127.0.0.1:4318") {
   );
   await page.locator("#search").fill("page-span-0629");
   await page.waitForFunction(
-    () => document.querySelectorAll(".timeline-bar").length === 1,
+    () => document.querySelectorAll(".timeline-bar.search-match").length === 1 && document.querySelector("#page-label").textContent.includes("601–630"),
   );
   const downloaded = page.waitForEvent("download");
   await page.locator("#export-button").click();
@@ -145,8 +151,6 @@ async function smoke(page, baseURL = "http://127.0.0.1:4318") {
       .textContent.includes("Browser research"),
   );
   await page.locator('[data-view="split"]').click();
-  if ((await page.locator("#comparison-details").getAttribute("open")) !== null)
-    await page.locator("#comparison-details summary").click();
   assert.deepEqual(errors, []);
   return {
     checks:

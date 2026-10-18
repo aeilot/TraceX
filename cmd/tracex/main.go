@@ -39,6 +39,7 @@ func run(ctx context.Context, args []string, out, errOut io.Writer) (result erro
 	runsDir := flags.String("runs-dir", "", "discover immediate run directories and JSON profiles")
 	watch := flags.Duration("watch", time.Second, "source refresh interval; 0 disables")
 	exportPath := flags.String("export", "", "write normalized JSON to this file and exit; use - for stdout")
+	runnerConfig := flags.String("runner-config", ".cache/tracex/runner.json", "saved UI runner settings; command-line ARIES options take precedence")
 	ariesDir := flags.String("aries-dir", "", "ARIES repository; explicitly enables experiment controls")
 	ariesBin := flags.String("aries-bin", "", "ARIES executable (default ARIES_DIR/bin/aries)")
 	executor := flags.String("aries-executor", "local", "ARIES execution host: local or orb")
@@ -134,7 +135,25 @@ func run(ctx context.Context, args []string, out, errOut io.Writer) (result erro
 	}
 	workspaceCtx, cancelWorkspace := context.WithCancel(ctx)
 	defer cancelWorkspace()
-	opts := server.Options{WatchInterval: *watch}
+	opts := server.Options{WatchInterval: *watch, RunnerConfigPath: *runnerConfig}
+	if *ariesDir == "" && *runnerConfig != "" {
+		if data, e := os.ReadFile(*runnerConfig); e == nil {
+			var saved experiment.Settings
+			if e = json.Unmarshal(data, &saved); e == nil {
+				info, statErr := os.Stat(filepath.Join(saved.Root, "profiles"))
+				if filepath.IsAbs(saved.Root) && statErr == nil && info.IsDir() && (saved.Executor == "local" || saved.Executor == "orb") {
+					opts.Experiment = &experiment.Config{Root: saved.Root, Binary: saved.Binary, Executor: saved.Executor, Machine: saved.Machine, StopTimeout: *stopTimeout}
+				} else {
+					fmt.Fprintln(errOut, "Saved runner directory is unavailable; configure ARIES in New experiment.")
+				}
+			} else {
+				fmt.Fprintln(errOut, "Saved runner settings are invalid; configure ARIES in New experiment.")
+			}
+		} else if !errors.Is(e, os.ErrNotExist) {
+			return fmt.Errorf("read runner settings: %w", e)
+		}
+	}
+	opts.Insight = &server.InsightConfig{Endpoint: os.Getenv("TRACEX_INSIGHT_ENDPOINT"), Model: os.Getenv("TRACEX_INSIGHT_MODEL"), APIKey: os.Getenv("TRACEX_INSIGHT_API_KEY")}
 	if *ariesDir != "" {
 		opts.Experiment = &experiment.Config{Root: *ariesDir, Binary: *ariesBin, Executor: *executor, Machine: *machine, JobsDir: *jobsDir, StopTimeout: *stopTimeout}
 		if opts.WatchInterval == 0 {

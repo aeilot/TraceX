@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 async function smoke(page, baseURL='http://127.0.0.1:4319') {
   const errors=[]; page.on('pageerror',e=>errors.push(e.message));
   await page.goto(baseURL);
-  await page.waitForSelector('.dag-node');
+  await page.waitForSelector('#experiment-library tbody tr');
   const catalog=await page.evaluate(()=>fetch('/api/experiments/catalog').then(r=>r.json()));
   assert.equal(catalog.enabled,true);assert.equal(catalog.ready,true);
   assert.ok(catalog.profiles.length>=2);
@@ -39,11 +39,12 @@ async function smoke(page, baseURL='http://127.0.0.1:4319') {
   await page.waitForFunction(id=>document.querySelector('#run-picker').value===id,running.run_id);
   const initial=await page.evaluate(id=>fetch('/api/profile?run='+id).then(r=>r.json()),running.run_id);
   assert.equal(initial.name,'Synthetic launcher fixture');assert.ok(initial.spans.length>0);
-  await page.waitForSelector('.dag-node[aria-label*="Synthetic fixture agent"]');
+  await page.waitForSelector('.timeline-bar[aria-label*="Synthetic fixture agent"]');
   await page.waitForFunction(async({id,duration})=>{const p=await fetch('/api/profile?run='+id).then(r=>r.json());return p.duration_ms>duration;},{id:running.run_id,duration:initial.duration_ms});
   await page.locator('[data-view="timeline"]').click();
   await page.waitForSelector('.timeline-bar');
   assert.equal(await page.locator('#experiment-start').isDisabled(),true);
+  await page.locator('#new-experiment').click();
   await page.getByRole('button',{name:'Stop experiment',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('#experiment-jobs').textContent.includes('cancelled'));
   const stopped=await page.evaluate(async()=>{const {jobs}=await fetch('/api/experiments/jobs').then(r=>r.json());return jobs.find(j=>j.action==='run');});

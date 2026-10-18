@@ -1,0 +1,34 @@
+.finding-grid {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;padding:20px;}
+.finding-card {min-width:0;padding:18px;background:var(--panel);border:1px solid var(--line);border-top:3px solid var(--agent);border-radius:4px;overflow-wrap:anywhere;}
+.finding-card.warning {border-top-color:var(--tool);}
+.finding-card h3 {margin:12px 0 8px;font:600 15px/1.5 var(--sans);}
+.finding-card p {font:13px/1.7 var(--sans);}
+.finding-card .finding-action {color:var(--ink-2);}
+.insight-actions {display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:12px;}
+.insight-actions .button {white-space:normal;}
+.insight-controls {display:flex;gap:16px;align-items:center;flex-wrap:wrap;padding:18px 20px;border-bottom:1px solid var(--line);}
+.insight-controls label {display:grid;gap:6px;font-size:12px;}
+.insight-controls select {min-height:36px;padding:6px 10px;}
+#insight-status {padding:0 20px;}
+#insight-scope-label {flex:1;min-width:180px;font-size:12px;line-height:1.6;color:var(--ink-2);}
+.insight-section {padding:20px;border-top:1px solid var(--line);}
+.insight-section > summary {font:600 15px var(--sans);cursor:pointer;}
+.insight-section p,.insight-comparison p {font-size:13px;line-height:1.7;}
+.insight-section pre {max-height:260px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--wash);padding:16px;font:11px/1.6 var(--mono);border:1px solid var(--line);}
+.insight-section label {display:grid;gap:8px;font-size:13px;margin-top:16px;}
+.insight-section label.insight-consent {display:flex;align-items:flex-start;line-height:1.6;}
+.insight-consent input {flex-shrink:0;margin-top:3px;}
+.insight-section input:not([type=checkbox]),.insight-section textarea {width:100%;min-width:0;border:1px solid var(--rule);border-radius:3px;padding:10px;background:var(--panel);color:var(--ink);font:13px/1.6 var(--sans);}
+.insight-section textarea {resize:vertical;}
+.insight-section .table-scroll table,.insight-comparison .table-scroll table {min-width:1000px;}
+.saved-investigation {padding:16px 0;border-top:1px solid var(--line);margin-top:16px;overflow-wrap:anywhere;}
+.saved-investigation h3 {margin:0 0 6px;font-size:15px;}
+.saved-investigation small {font:11px/1.6 var(--mono);color:var(--muted);}
+.note-text {white-space:pre-wrap;}
+.insight-comparison {border-top:1px solid var(--line);padding:20px;}
+.insight-comparison h3 {font-size:16px;}
+#insight-ai-result {display:grid;gap:14px;margin-top:16px;}
+body[data-workspace=insights] .run-card .metrics {display:none;}
+#insight-overview .finding-grid:empty {min-height:80px;}
+@media(max-width:1200px) {.finding-grid {grid-template-columns:repeat(2,minmax(0,1fr));}}
+@media(max-width:700px) {.finding-grid {grid-template-columns:minmax(0,1fr);padding:14px;}.insight-section,.insight-controls,.insight-comparison {padding:16px;}}

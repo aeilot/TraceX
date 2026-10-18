@@ -7,6 +7,11 @@ build:
 test:
 	go test ./...
 test-web:
+	node --check web/insight-model.js
+	node --check web/insights.js
+	node --check web/motion.js
+	node --check web/workspace.js
+	node --check web/workspace-model.js
 	node --check web/app.js
 	node --check web/experiments.js
 	node --check web/experiment-model.js

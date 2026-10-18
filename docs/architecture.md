@@ -27,17 +27,25 @@ ARIES native artifacts / normalized profiles / JSONL events
 | `GET /api/profile?run=run-1` | Complete normalized snapshot; export includes data outside current filters/pages |
 | `GET /api/view?run=run-1` | Current filtered page, resource envelope, full-run analysis, counts and revision |
 | `GET /api/span?run=run-1&id=SPAN_ID` | Span, all incident recorded edges, interval resource statistics |
+| `GET /api/find?run=run-1&q=TEXT&index=0` | Match count and selected span locator, including its offset in the task/kind/time-filtered context; does not remove other spans from the view |
 | `GET /api/analysis?run=run-1` | Full-run analysis |
+| `GET /api/insights?run=run-1` | Cached diagnostics, call aggregates and task evidence; optional span/task/time scope |
+| `GET /api/insights/ai` | Public interpretation readiness, endpoint and model; excludes API key |
+| `POST /api/insights/ai` | Explicitly confirmed bounded evidence interpretation through the configured provider |
 | `GET /api/sweep?run=run-1` | Per-task sweep samples: finished duration, model-call and browser-tool local durations, sandbox throttling counter increases, and the run configuration |
 | `GET /api/events` | Reconnectable `revision` server-sent events with event IDs and heartbeats |
 | `GET /api/health` | `{"status":"ok"}` |
+| `GET /api/experiments/runner` | Current runner paths and execution target; loopback only |
+| `GET /api/experiments/discover` | Nearby ARIES directories and existing OrbStack machines; loopback only |
+| `POST /api/experiments/configure` | Save and apply runner settings while idle; loopback only |
+| `POST /api/experiments/check` | Bounded host prerequisite checks without tool output or credential values; loopback only |
 | `GET /api/experiments/catalog` | Allowlisted profile metadata and runner readiness |
 | `GET /api/experiments/jobs` | In-memory jobs, process state, run mount and outcome summaries |
 | `POST /api/experiments/start` | Explicit prepare/run submission; requires configured runner |
 | `POST /api/experiments/stop` | Graceful interrupt of the owned job |
 | `GET /`, bundled JS and CSS paths | Allowlisted bundled assets |
 
-Read-only JSON and static routes support HEAD; the SSE route requires a streaming GET. Experiment mutations require bounded JSON POST and reject a mismatched browser Origin. Other methods return 405. Unknown paths return 404. API responses use no-store and nosniff. No raw file browsing, upload endpoint, or model API is provided. Experiment commands use fixed CLI arguments, selected local presets and private generated profiles; request bodies cannot supply executable paths or shell commands.
+Read-only JSON and static routes support HEAD; the SSE route requires a streaming GET. Experiment mutations require bounded JSON POST and reject a mismatched browser Origin. Other methods return 405. Unknown paths return 404. API responses use no-store and nosniff. No raw file browsing, upload endpoint, is provided. Optional model interpretation is described in [Insights](insights.md). Experiment commands use fixed CLI arguments, selected local presets and private generated profiles; prepare/run requests cannot supply executable paths or shell commands. The separate loopback-only runner settings endpoint accepts operator-selected directory and binary paths. Saved settings contain no credential values and are atomically replaced; active jobs prevent changing execution targets.
 
 ### View query
 

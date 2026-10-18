@@ -53,6 +53,17 @@ func (m *Manager) Start(req Request) (Job, error) {
 	if e != nil {
 		return Job{}, fmt.Errorf("%w: profile unavailable", ErrInvalid)
 	}
+	if req.Model != nil {
+		if str(obj(raw, "runtime"), "mode") != "external" || !validModel(*req.Model) {
+			return Job{}, fmt.Errorf("%w: invalid external model settings", ErrInvalid)
+		}
+		model := obj(raw, "model")
+		model["id"] = req.Model.ID
+		model["base_url"] = req.Model.BaseURL
+		model["api_key_env"] = req.Model.APIKeyEnv
+		model["reasoning_effort"] = req.Model.ReasoningEffort
+		delete(model, "api_key")
+	}
 	p := preset(req.ProfileID, raw)
 	selected := p.Tasks
 	if req.Tasks != nil {

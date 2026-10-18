@@ -41,7 +41,9 @@ make build
 
 ## Run real experiments
 
-Enable the **New experiment** panel against a built ARIES checkout:
+Start with `make run`, open **New experiment → ARIES runner settings**, discover or enter your ARIES directory, select the execution host, and save. The panel can inspect host prerequisites and override external-model settings for each job. Runner settings persist locally across restarts. ARIES must already be checked out and built on the execution host.
+
+Alternatively, configure the runner at startup:
 
 ```sh
 ./bin/tracex --aries-dir /absolute/path/to/ARIES
@@ -53,11 +55,14 @@ Select a workload and profile, choose declared tasks and concurrency, prepare pr
 
 ## Explore
 
+- **Experiment workspace:** search mounted and imported runs by name or configuration, filter source state, and select two runs for comparison. Open a run into Overview, Profiler, Insights, Tasks, Configuration, or Evidence. The Tasks table supports search, status filtering and duration/score sorting with direct navigation to the selected task's execution.
+- **Restore an investigation:** copy the view link to retain the source run identity, task/span, filters, time window, visualization and pagination. The same source must be mounted; browser imports must be reimported after a reload. Sources & runner shows source errors and execution-target readiness. See [workspace behavior and verification](docs/frontend-workspace.md).
 - **Agent DAG / timeline / split view:** explicit parent, spawn, call, return, dependency, and multi-parent join relationships. Cyclic graphs are rejected.
 - **Analysis:** per-kind interval unions and summed work, task P50/P95, throughput, effective work concurrency, input/output tokens with known-usage coverage, and unobserved task time.
 - **Recorded critical path:** longest sum of completed span durations on explicit finish-before-start dependency/join/return edges. Parent containment and unrecorded waits are excluded. Missing or contradictory precedence remains unavailable.
 - **Linked time window:** enter a range or drag empty timeline space. Spans and CPU/memory/GPU signals share the window. Span details show concurrent resource sample statistics, with runtime/task/shared context labels rather than causal cost claims.
 - **Comparison:** choose baseline and candidate runs, inspect configuration differences, latency, throughput, tokens, and evidence coverage. Imported JSON profiles can be compared with mounted sources.
+- **Insights:** evidence-linked diagnostics, model/tool aggregates, task-paired regressions, optional explicitly requested LLM interpretation, and a browser-local investigation notebook. See [configuration and metric definitions](docs/insights.md).
 - **Configuration sweep:** select several runs and plot task duration P50/P90, model-call P50, browser-tool local work P50/P90 and sandbox throttled-period share against one recorded configuration field (e.g. `concurrency`, `sandbox_cpu_limit`). Optional steady window and indexing to a baseline run. See [experiments](docs/experiments.md#configuration-sweep).
 - **Large runs:** server-side filtering and pagination, stable time ordering, overlap indexes, span lookup across pages, and per-runtime resource envelopes that retain observed extrema and missing-value boundaries. Every matching span remains reachable through pagination.
 - **Language:** English and Simplified Chinese. The interface follows the browser language; the header switch overrides it and is remembered per browser.
@@ -95,7 +100,7 @@ The producer has a finite demonstration sequence. Restart it by truncating the s
 
 ## Local data
 
-The service exposes normalized summaries and bundled assets. It does not serve run directories or raw logs, execute evidence, or upload runs. With `--aries-dir`, explicitly submitted experiment actions start ARIES, which can call models. Without that flag, the service only inspects evidence. Prompts, tool arguments, outputs, raw errors, and credentials are excluded by the adapters. Names, IDs, selected metadata, and comparison conditions can still be sensitive; review exports before sharing. Browser imports stay local. Private runs and exports belong outside Git.
+The service exposes normalized summaries and bundled assets. It does not serve run directories or raw logs, execute evidence, or upload runs. After configuring a runner in the UI or with `--aries-dir`, explicitly submitted experiment actions start ARIES, which can call models. Without a runner or optional Insights model configuration, the service only inspects evidence. A configured Insights provider receives only the previewed summary after explicit submission. Prompts, tool arguments, outputs, raw errors, and credentials are excluded by the adapters. Names, IDs, selected metadata, and comparison conditions can still be sensitive; review exports before sharing. Browser imports stay local. Private runs and exports belong outside Git.
 
 ## Develop
 

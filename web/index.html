@@ -13,11 +13,19 @@
     <script src="/i18n.js" defer></script>
     <script src="/profile.js" defer></script>
     <link rel="stylesheet" href="/styles.css" />
+    <script src="/motion.js" defer></script>
     <script src="/app.js" defer></script>
     <link rel="stylesheet" href="/experiments.css" />
     <link rel="stylesheet" href="/lab.css" />
     <script src="/experiment-model.js" defer></script>
     <script src="/experiments.js" defer></script>
+    <link rel="stylesheet" href="/workspace.css" />
+    <link rel="stylesheet" href="/motion.css" />
+    <script src="/workspace-model.js" defer></script>
+    <script src="/insight-model.js" defer></script>
+    <script src="/workspace.js" defer></script>
+    <script src="/insights.js" defer></script>
+    <link rel="stylesheet" href="/insights.css" />
   </head>
   <body>
     <aside class="sidebar">
@@ -26,9 +34,14 @@
         ><span class="version">0.2</span></a
       >
       <div class="workspace-label">AGENT WORKLOAD PROFILER</div>
-      <button id="overview" class="nav-item active">
-        <span>◈</span> Workload explorer <span class="nav-count">1</span>
+      <nav class="workspace-navigation" aria-label="Workspace navigation">
+      <button class="nav-item active" data-page="experiments">Experiments</button>
+      <button id="overview" class="nav-item" data-page="profiler">
+        <span>◈</span> Profiler <span class="nav-count">1</span>
       </button>
+      <button class="nav-item" data-page="compare">Compare</button>
+      <button class="nav-item" data-page="sources">Sources &amp; runner</button>
+      </nav>
       <div class="sidebar-section run-section"><span>RUNS</span></div>
       <label class="run-picker-label"
         ><select id="run-picker" aria-label="Select run"></select
@@ -60,12 +73,6 @@
           Workspace <span>/</span> <strong>Workload explorer</strong>
         </div>
         <div class="header-actions">
-          <div
-            id="language-switch"
-            class="view-tabs language-switch"
-            role="group"
-            aria-label="Language"
-          ></div>
           <select
             id="run-picker-mobile"
             aria-label="Select active run"
@@ -83,13 +90,19 @@
             accept=".json,application/json"
             hidden
           />
+          <div
+            id="language-switch"
+            class="view-tabs language-switch"
+            role="group"
+            aria-label="Language"
+          ></div>
         </div>
       </header>
       <main>
         <div class="page-heading">
           <div>
             <div class="eyebrow">EXPERIMENT RECORD</div>
-            <h1>Workload profile</h1>
+            <h1 id="workspace-title">Experiments</h1>
             <p class="page-description">
               Measured intervals, explicit dependencies and observed resource
               samples. Derived quantities and missing evidence are labelled.
@@ -101,20 +114,48 @@
           </button></div>
         </div>
         <div id="notice" class="notice" role="status" hidden></div>
-        <section id="experiment-panel" class="experiment-panel" aria-label="Run a real ARIES experiment" hidden>
+        <section id="experiment-panel" class="experiment-panel t-panel-slide" data-open="false" aria-label="Run a real ARIES experiment" hidden>
           <div class="experiment-panel-heading"><div><div class="eyebrow">REAL ARIES EXECUTION</div><h2>New experiment</h2><p>Choose a configured workload and follow its live profile.</p></div><button id="close-experiment" class="button subtle">Close</button></div>
           <p id="experiment-target" class="experiment-target"></p>
           <p id="experiment-message" role="status"></p>
-          <pre id="experiment-config" hidden>tracex --aries-dir ROOT --aries-executor orb --aries-machine aries-vm</pre>
-          <form id="experiment-form">
+          <details id="experiment-config" class="runner-setup">
+            <summary>ARIES runner settings</summary>
+            <p>Find an existing ARIES checkout or enter its absolute path on the TraceX host.</p>
+            <form id="runner-form">
+              <div class="experiment-fields">
+                <label>ARIES directory<input id="runner-root" list="runner-roots" placeholder="/absolute/path/to/ARIES" required /><datalist id="runner-roots"></datalist></label>
+                <label>Execution host<select id="runner-executor"><option value="local">Local Linux</option><option value="orb">OrbStack Linux machine</option></select></label>
+                <label id="runner-machine-field">OrbStack machine<input id="runner-machine" list="runner-machines" /><datalist id="runner-machines"></datalist></label>
+                <label>ARIES binary (optional)<input id="runner-binary" placeholder="bin/aries" /></label>
+              </div>
+              <div class="experiment-job-actions"><button id="runner-discover" type="button" class="button">Discover directories &amp; machines</button><button id="runner-save" type="submit" class="button">Save runner settings</button><button id="runner-check" type="button" class="button">Check execution host</button></div>
+              <p id="runner-message" role="status"></p><ul id="runner-checks" aria-live="polite"></ul>
+              <p class="experiment-help">Save the target before checking it. Checks inspect Linux, the shared binary, Docker and named credential variables. Dataset and model endpoint readiness are not tested. Credential values stay on the execution host.</p>
+            </form>
+          </details>
+          <form id="experiment-form" hidden>
             <div class="experiment-fields"><label>Find a workload<input id="experiment-filter" type="search" placeholder="Workload, harness, model…" /></label><label>Profile preset<select id="experiment-profile"></select></label><label>Concurrency<input id="experiment-concurrency" type="number" min="1" step="1" value="1" required /></label></div>
-            <p id="experiment-profile-details"></p><p id="experiment-schedule" class="experiment-warning" hidden></p>
+            <p id="experiment-profile-details"></p>
+            <details id="experiment-model-settings" class="runner-setup" hidden><summary>Model configuration</summary>
+              <label class="experiment-ack"><input id="experiment-model-override" type="checkbox" /><span>Override this profile’s external model for this job</span></label>
+              <div class="experiment-fields"><label>Model ID<input id="experiment-model-id" /></label><label>Model endpoint<input id="experiment-model-url" type="url" /></label><label>API key environment variable<input id="experiment-model-key-env" placeholder="DEEPSEEK_API_KEY" /></label><label>Reasoning effort<input id="experiment-model-reasoning" /></label></div>
+              <p class="experiment-help">Overrides apply to the private job copy. The original ARIES profile is preserved. Configure the named credential on the execution host.</p>
+            </details><p id="experiment-schedule" class="experiment-warning" hidden></p>
             <fieldset class="experiment-tasks"><legend>Workload tasks <span id="experiment-task-count"></span></legend><div class="experiment-task-actions"><button id="experiment-select-all" class="button small" type="button">Select all</button><button id="experiment-clear" class="button subtle small" type="button">Clear</button></div><div id="experiment-task-list"></div></fieldset>
             <label class="experiment-ack"><input id="experiment-ack" type="checkbox" /><span id="experiment-ack-label">I acknowledge real model calls may incur provider charges.</span></label>
             <div class="experiment-submit"><button id="experiment-prepare" class="button" type="button">Prepare data &amp; images</button><button id="experiment-start" class="button experiment-primary" type="submit">Start experiment</button></div><p class="experiment-help">Preparation runs ARIES setup without model calls. Runs use the credentials and endpoints in the selected profile.</p><p id="experiment-validation" role="status"></p>
           </form>
           <div class="experiment-jobs-heading"><h3>Experiment jobs</h3><button id="experiment-reload" class="button subtle small">Refresh jobs</button></div><div id="experiment-jobs" aria-live="polite"></div>
         </section>
+        <section id="experiments-workspace" class="workspace-card" aria-label="Experiment library">
+          <div class="workspace-card-heading"><div><h2>Experiment library</h2><p>Open a run to investigate, or select two runs to compare.</p></div><span id="library-count" class="tag"></span></div>
+          <div class="library-controls"><label>Search experiments<input id="experiment-search" type="search" placeholder="Name, model, harness…" /></label><label>Source state<select id="experiment-state"><option value="all">All sources</option><option value="live">Live sources</option><option value="snapshot">Snapshots</option><option value="error">Source errors</option></select></label><button id="library-compare" class="button" disabled>Compare selected</button></div>
+          <p id="library-selection" role="status"></p><div id="experiment-library" class="table-scroll"></div>
+        </section>
+        <nav id="run-tabs" class="run-tabs" aria-label="Run workspace" hidden><button data-page="summary">Overview</button><button data-page="profiler">Profiler</button><button data-page="insights">Insights</button><button data-page="tasks">Tasks</button><button data-page="configuration">Configuration</button><button data-page="evidence">Evidence</button><button id="copy-view-link" class="button">Copy view link</button></nav>
+        <section id="tasks-workspace" class="workspace-card" aria-label="Task results" hidden><div class="workspace-card-heading"><div><h2>Task results</h2><p>Find slow or failed tasks, then inspect their execution.</p></div></div><div class="library-controls"><label>Search tasks<input id="task-search" type="search" placeholder="Task name or ID…" /></label><label>Task status<select id="task-status"><option value="all">All statuses</option><option value="failed">Failed or canceled</option><option value="succeeded">Succeeded</option></select></label><label>Sort tasks<select id="task-sort"><option value="slowest">Slowest first</option><option value="name">Name</option><option value="score">Lowest score first</option></select></label></div><div id="task-results" class="table-scroll"></div></section>
+        <section id="configuration-workspace" class="workspace-card" aria-label="Recorded configuration" hidden><div class="workspace-card-heading"><div><h2>Recorded configuration</h2><p>Only conditions recorded by the source are shown.</p></div></div><div id="run-configuration" class="table-scroll"></div></section>
+        <section id="sources-workspace" class="workspace-card" aria-label="Sources and runner" hidden><div class="workspace-card-heading"><div><h2>Sources &amp; runner</h2><p>Inspect mounted sources and the configured execution target.</p></div><button id="refresh-runner" class="button">Check runner</button></div><div id="runner-summary" role="status"></div><div id="source-results" class="table-scroll"></div></section>
         <section class="run-card" data-fig="§1 Run summary" aria-label="Run summary">
           <div class="run-identity">
             <div class="run-symbol">⌘</div>
@@ -149,6 +190,15 @@
               ><small>Interval union within each kind</small>
             </div>
           </div>
+        </section>
+        <section id="insight-overview" class="workspace-card" hidden><div class="workspace-card-heading"><div><h2>Automatic diagnostics</h2><p>Measured findings with links to the underlying evidence.</p></div><button id="open-insights" class="button">View all insights</button></div><div id="overview-findings" class="finding-grid"></div></section>
+        <section id="insights-workspace" class="workspace-card" aria-label="Insights workspace" hidden>
+          <div class="workspace-card-heading"><div><h2>Insights</h2><p>Inspect evidence, compare tasks and record your conclusions.</p></div><button id="refresh-insights" class="button">Refresh insights</button></div>
+          <div class="insight-controls"><label>Analysis scope<select id="insight-scope"><option value="run">Full run</option><option value="window">Current time window</option><option value="span" disabled>Selected span interval</option><option value="comparison" disabled>Compared runs</option></select></label><span id="insight-scope-label"></span></div><p id="insight-status" role="status"></p>
+          <div id="insight-findings" class="finding-grid"></div>
+          <details class="insight-section" open><summary>Model and tool aggregates</summary><p>Same-kind parent call envelopes are excluded. Summed work can overlap; union time removes overlap within each group. Different groups can overlap.</p><div id="insight-groups" class="table-scroll"></div></details>
+          <details class="insight-section" open><summary>LLM interpretation</summary><p id="insight-model-status" role="status"></p><p>Only the evidence preview below is sent when you explicitly request an interpretation. Provider calls may incur charges. No prompts, raw logs or notebook text are included.</p><details><summary>Preview evidence sent to the model</summary><pre id="insight-packet"></pre></details><label class="insight-consent"><input id="insight-ai-consent" type="checkbox" />I agree to send this evidence to the configured endpoint.</label><div class="insight-actions"><button id="insight-ai-start" class="button experiment-primary" disabled>Interpret evidence</button><button id="insight-ai-cancel" class="button" hidden>Cancel interpretation</button><button id="insight-ai-save" class="button" hidden>Save interpretation</button></div><p id="insight-ai-status" role="status"></p><div id="insight-ai-result"></div></details>
+          <details class="insight-section" open><summary>Investigation notebook</summary><p>Saved in this browser. Notes retain their evidence and revision; they do not update automatically with live data.</p><label>Note title<input id="insight-note-title" maxlength="160" /></label><label>Investigation note<textarea id="insight-note-body" maxlength="4000" rows="3"></textarea></label><div class="insight-actions"><button id="insight-note-save" class="button">Save note</button><button id="insight-note-cancel" class="button" hidden>Cancel edit</button><button id="insight-note-export" class="button">Export notebook</button></div><div id="insight-notes"></div></details>
         </section>
         <section class="analysis-card" data-fig="§2 Analysis" aria-label="Workload analysis">
           <div class="analysis-metrics" id="analysis-metrics"></div>
@@ -250,10 +300,10 @@
                 ><input
                   id="search"
                   type="search"
-                  placeholder="Find a span or agent…"
+                  placeholder="Find and highlight a span…"
                   aria-label="Search spans and agents"
                 /><kbd>/</kbd></label
-              ><select id="kind-filter" aria-label="Filter span type">
+              ><span id="span-search-controls" class="span-search-controls" hidden><span id="span-search-status" role="status" aria-live="polite"></span><button id="span-search-prev" class="icon-button" aria-label="Previous match" title="Previous match (Shift+Enter)">↑</button><button id="span-search-next" class="icon-button" aria-label="Next match" title="Next match (Enter)">↓</button></span><select id="kind-filter" aria-label="Filter span type">
                 <option value="all">All span types</option>
               </select>
             </div>
@@ -296,7 +346,7 @@
             ><button id="apply-range" class="button small">Apply</button
             ><button id="full-range" class="button subtle small">
               Full run</button
-            ><span class="brush-hint"
+            ><button id="insight-window" class="button small">Analyze this window</button><span class="brush-hint"
               >Drag empty timeline space to select a window</span
             >
           </div>
@@ -469,7 +519,7 @@
         </footer>
       </main>
     </div>
-    <aside id="inspector" class="inspector" aria-label="Span details" hidden>
+    <aside id="inspector" class="inspector t-panel-slide" data-open="false" aria-label="Span details" hidden>
       <div class="inspector-heading">
         <span>SPAN DETAILS</span
         ><button
@@ -482,6 +532,6 @@
       </div>
       <div id="inspector-content"></div>
     </aside>
-    <div id="toast" class="toast" role="status" hidden></div>
+    <div id="toast" class="toast t-toast" role="status" hidden></div>
   </body>
 </html>

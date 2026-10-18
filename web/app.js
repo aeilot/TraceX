@@ -33,8 +33,11 @@ const state = {
   task: "all",
   kind: "all",
   query: "",
+  searchIndex: 0,
+  searchResult: null,
+  searchLocate: true,
   selected: null,
-  view: "split",
+  view: "timeline",
   zoom: 1,
   runtime: "all",
   imported: false,
@@ -58,9 +61,9 @@ const state = {
 let toastTimer, searchTimer;
 function notify(message) {
   $("#toast").textContent = message;
-  $("#toast").hidden = false;
+  TraceXMotion.visible($("#toast"), true);
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => ($("#toast").hidden = true), 4500);
+  toastTimer = setTimeout(() => TraceXMotion.visible($("#toast"), false), 4500);
 }
 function node(tag, attrs = {}, text) {
   const e = document.createElementNS(NS, tag);
@@ -113,6 +116,45 @@ function networkText(n) {
   if (n.response_bytes != null) parts.push(bytes(n.response_bytes));
   return parts.join(" · ");
 }
+function spanSearchClass(span) {
+  if (!TraceXWorkspace.matches(span, state.query)) return "";
+  return "search-match" + (state.searchResult?.span_id === span.id ? " search-current" : "");
+}
+function renderSpanSearch() {
+  const active = !!state.query, result = state.searchResult;
+  $("#span-search-controls").hidden = !active;
+  $("#span-search-status").textContent = !active ? "" : !result ? t9n("Searching…")
+    : !result.total ? t9n("No matching spans in this context")
+    : t9n("{current} / {total} matches", {current:result.index + 1, total:result.total});
+  for (const id of ["#span-search-prev", "#span-search-next"]) $(id).disabled = !result?.total;
+}
+function centerSpan(id) {
+  for (const containerID of ["#dag-scroll", "#timeline-scroll"]) {
+    const container = $(containerID);
+    if (container.closest(".visual-panel").hidden) continue;
+    const el = [...container.querySelectorAll("[data-span-id]")].find(el => el.dataset.spanId === id);
+    if (!el) continue;
+    const box = el.getBoundingClientRect(), frame = container.getBoundingClientRect();
+    container.scrollTo({
+      left: container.scrollLeft + box.left - frame.left + box.width / 2 - container.clientWidth / 2,
+      top: container.scrollTop + box.top - frame.top + box.height / 2 - container.clientHeight / 2,
+      behavior: TraceXMotion.scrollBehavior(),
+    });
+  }
+}
+function nextSpanMatch(direction) {
+  if (!state.searchResult?.total) return;
+  state.searchIndex = (state.searchIndex + direction + state.searchResult.total) % state.searchResult.total;
+  state.searchLocate = true;
+  clearTimeout(searchTimer);
+  loadView();
+}
+$("#span-search-prev").onclick = () => nextSpanMatch(-1);
+$("#span-search-next").onclick = () => nextSpanMatch(1);
+$("#search").onkeydown = event => {
+  if (event.key === "Enter") { event.preventDefault(); nextSpanMatch(event.shiftKey ? -1 : 1); }
+};
+
 function spanDuration(s) {
   return s.incomplete
     ? t9n("In progress")
@@ -210,6 +252,9 @@ function resetFilters() {
   state.task = "all";
   state.kind = "all";
   state.query = "";
+  state.searchIndex = 0;
+  state.searchResult = null;
+  state.searchLocate = true;
   state.selected = null;
   state.zoom = 1;
   state.runtime = "all";
@@ -227,6 +272,12 @@ async function loadSource() {
     state.watchInterval = data.watch_interval_ms || 0;
     if (!state.runKey || !allRuns().some((r) => r.id === state.runKey))
       state.runKey = state.runs[0]?.id || "";
+    if (state.restoreRun) {
+      const restored = allRuns().find(r => r.run_id === state.restoreRun);
+      if (restored) state.runKey = restored.id;
+      else notify(t9n("Linked run is unavailable. Mount the source or reimport the profile."));
+      state.restoreRun = "";
+    }
     updateRunPickers();
     await loadView();
     connectEvents();
@@ -243,14 +294,30 @@ async function loadView() {
   if (!state.runKey) return;
   const request = ++state.request;
   try {
-    let data;
+    let data, searchTarget = "";
     const local = state.imports.get(state.runKey);
     state.imported = !!local;
+    if (state.query) {
+      const result = local ? TraceXWorkspace.find(local.spans, state) : await json("/api/find?" + new URLSearchParams({
+        run:state.runKey, q:state.query, index:state.searchIndex,
+        ...(state.task !== "all" ? {task:state.task} : {}),
+        ...(state.kind !== "all" ? {kind:state.kind} : {}),
+        start_ms:state.rangeStart,
+        ...(state.rangeEnd != null ? {end_ms:state.rangeEnd} : {}),
+      }));
+      if (request !== state.request) return;
+      state.searchResult = result;
+      state.searchIndex = result.index;
+      if (state.searchLocate && result.total) {
+        state.pageOffset = Math.floor(result.offset / state.pageLimit) * state.pageLimit;
+        searchTarget = result.span_id;
+      }
+      state.searchLocate = false;
+    } else state.searchResult = null;
     if (local) {
       data = localPage(local, {
         task: state.task,
         kind: state.kind,
-        q: state.query,
         runtime: state.runtime,
         offset: state.pageOffset,
         limit: state.pageLimit,
@@ -267,7 +334,6 @@ async function loadView() {
       for (const [k, v] of Object.entries({
         task: state.task,
         kind: state.kind,
-        q: state.query,
         runtime: state.runtime,
         start_ms: state.rangeStart,
         end_ms: state.rangeEnd,
@@ -298,8 +364,9 @@ async function loadView() {
     render();
     setLiveStatus();
     if (state.selected) selectSpan(state.selected);
+    if (searchTarget) requestAnimationFrame(() => centerSpan(searchTarget));
   } catch (e) {
-    if (request === state.request) showError(e);
+    if (request === state.request) { showError(e); if (state.query) $("#span-search-status").textContent = t9n("Search unavailable"); }
   }
 }
 function setLiveStatus(label) {
@@ -504,6 +571,7 @@ function render() {
     state.pageOffset + state.pageLimit >= state.totalSpans;
   renderAnalysis();
   renderViews();
+  window.dispatchEvent(new Event("tracex:render"));
 }
 function renderAnalysis() {
   const a = state.analysis,
@@ -795,6 +863,7 @@ async function compareRuns() {
       );
     }
     target.append(coverage);
+    window.dispatchEvent(new CustomEvent("tracex:comparison",{detail:{left,right}}));
   } catch (e) {
     notify(t9n("Comparison failed: {error}", { error: e.message }));
   }
@@ -1044,10 +1113,13 @@ function drawSweepChart(svg, points, categories, fmt, opts) {
 }
 function setTask(id) {
   state.task = id;
+  state.searchIndex = 0;
+  state.searchLocate = true;
   state.pageOffset = 0;
   closeInspector();
   loadView();
 }
+let renderedView = null;
 function renderViews() {
   if (!state.profile) return;
   const spans = visible();
@@ -1062,6 +1134,12 @@ function renderViews() {
   drawDAG(spans);
   drawTimeline(spans);
   drawResources();
+  if (renderedView !== null && renderedView !== state.view) {
+    for (const id of ["#dag-panel", "#timeline-panel"])
+      if (!$(id).hidden) TraceXMotion.enter($(id));
+  }
+  renderedView = state.view;
+  renderSpanSearch();
 }
 function drawDAG(spans) {
   const svg = $("#dag");
@@ -1162,7 +1240,8 @@ function drawDAG(spans) {
   for (const s of displayed) {
     const { x, y } = pos.get(s.id);
     const g = node("g", {
-      class: `dag-node ${s.status === "failed" || s.status === "ERROR" ? "failed" : ""} ${state.selected === s.id ? "selected" : ""} ${state.critical && state.analysis.critical_path.span_ids.includes(s.id) ? "critical" : ""}`,
+      "data-span-id": s.id,
+      class: `dag-node ${spanSearchClass(s)} ${s.status === "failed" || s.status === "ERROR" ? "failed" : ""} ${state.selected === s.id ? "selected" : ""} ${state.critical && state.analysis.critical_path.span_ids.includes(s.id) ? "critical" : ""}`,
       transform: `translate(${x},${y})`,
       tabindex: 0,
       role: "button",
@@ -1318,7 +1397,8 @@ function drawTimeline(spans) {
       height: 20,
       rx: 3,
       fill: color(s),
-      class: `timeline-bar ${s.incomplete ? "incomplete" : ""} ${s.status === "failed" || s.status === "ERROR" ? "failed" : ""} ${state.selected === s.id ? "selected" : ""} ${state.critical && state.analysis.critical_path.span_ids.includes(s.id) ? "critical" : ""}`,
+      "data-span-id": s.id,
+      class: `timeline-bar ${spanSearchClass(s)} ${s.incomplete ? "incomplete" : ""} ${s.status === "failed" || s.status === "ERROR" ? "failed" : ""} ${state.selected === s.id ? "selected" : ""} ${state.critical && state.analysis.critical_path.span_ids.includes(s.id) ? "critical" : ""}`,
       tabindex: 0,
       role: "button",
       "aria-label": `${s.name}, ${format(s.start_ms)} to ${format(s.start_ms + s.duration_ms)}`,
@@ -1433,7 +1513,7 @@ function drawResources() {
   const rates = net.map((r) => r.network_rate).filter(Number.isFinite);
   $("#network-peak").textContent = rates.length
     ? t9n("{value} peak", { value: `${bytes(maximum(rates))}/s` })
-    : t9n("Not measured");
+    : resourceEmptyLabel();
   const throttle = throttleShares(selected);
   drawChart(
     $("#throttle-chart"),
@@ -1445,16 +1525,16 @@ function drawResources() {
   const shares = throttle.map((r) => r.throttled_percent).filter(Number.isFinite);
   $("#throttle-peak").textContent = shares.length
     ? t9n("{value} peak", { value: `${maximum(shares).toFixed(1)}%` })
-    : t9n("Not measured");
+    : resourceEmptyLabel();
   const gpu = selected.map((r) => r.gpu_percent).filter(Number.isFinite);
   $("#gpu-peak").textContent = gpu.length
     ? t9n("{value} peak", { value: `${maximum(gpu).toFixed(1)}%` })
-    : t9n("Not measured");
+    : resourceEmptyLabel();
   const cpu = selected.map((r) => r.cpu_percent).filter(Number.isFinite),
     mem = selected.map((r) => r.memory_bytes).filter(Number.isFinite);
   $("#cpu-peak").textContent = cpu.length
     ? t9n("{value} peak", { value: `${maximum(cpu).toFixed(1)}%` })
-    : t9n("Not measured");
+    : resourceEmptyLabel();
   // Percent of the runtime's own memory limit; series without a limit are
   // excluded rather than compared against another runtime's limit.
   const pct = selected
@@ -1465,7 +1545,7 @@ function drawResources() {
   $("#memory-peak").textContent = mem.length
     ? t9n("{value} peak", { value: bytes(maximum(mem)) }) +
       (pct.length ? " · " + t9n("{percent} of limit", { percent: `${maximum(pct).toFixed(1)}%` }) : "")
-    : t9n("Not measured");
+    : resourceEmptyLabel();
 }
 // Monitor network counters are cumulative per runtime; rates come from
 // consecutive samples of one series. Counter resets yield no rate.
@@ -1501,6 +1581,12 @@ function networkRates(samples) {
   }
   return out;
 }
+function resourceEmptyLabel() {
+  if (state.resourceError) return t9n("Samples not displayed");
+  if (!state.resourceReturned && (state.task !== "all" || state.runtime !== "all" || state.rangeStart > 0 || state.rangeEnd != null))
+    return t9n("No samples in selection");
+  return t9n("Not measured");
+}
 function drawChart(svg, samples, key, total, tint, axis) {
   svg.replaceChildren();
   const w = 500,
@@ -1516,7 +1602,7 @@ function drawChart(svg, samples, key, total, tint, axis) {
       node(
         "text",
         { x: w / 2, y: 55, "text-anchor": "middle", class: "chart-axis" },
-        t9n("No measurements available"),
+        resourceEmptyLabel(),
       ),
     );
     return;
@@ -1643,7 +1729,8 @@ async function selectSpan(id) {
   }
   if (!s) return;
   state.selected = id;
-  $("#inspector").hidden = false;
+  window.dispatchEvent(new Event("tracex:selection"));
+  TraceXMotion.visible($("#inspector"), true);
   document.body.classList.add("inspecting");
   const content = $("#inspector-content");
   content.replaceChildren();
@@ -1665,7 +1752,7 @@ async function selectSpan(id) {
   for (const [a, b] of [
     [t9n("Agent"), s.agent_id || t9n("Not recorded")],
     [t9n("Task"), s.task_id || t9n("Run scope")],
-    [t9n("Status"), t9n(s.status || "Unknown")],
+    [t9n("Span status"), t9n(s.status || "Unknown")],
     [t9n("Time quality"), s.attributes?.time_quality || t9n("Recorded interval")],
     [t9n("Start"), format(s.start_ms)],
     [
@@ -1677,15 +1764,15 @@ async function selectSpan(id) {
     [t9n("Runtime"), s.runtime_id || t9n("Not recorded")],
     ...(task
       ? [
-          [t9n("Evaluation"), t9n(task.evaluation_status || "Unknown")],
+          [t9n("Task evaluation"), t9n(task.evaluation_status || "Unknown")],
           [
-            t9n("Accuracy"),
+            t9n("Task accuracy"),
             Number.isFinite(task.score)
               ? task.score.toFixed(3)
               : t9n("Not recorded"),
           ],
-          [t9n("End reason"), t9n(task.end_reason || "Not recorded")],
-          [t9n("Cleanup"), t9n(task.cleanup_status || "Unknown")],
+          [t9n("Task end reason"), t9n(task.end_reason || "Not recorded")],
+          [t9n("Task cleanup"), t9n(task.cleanup_status || "Unknown")],
           ...(task.flags?.length ? [[t9n("Evidence flags"), flagText(task)]] : []),
         ]
       : []),
@@ -1815,12 +1902,17 @@ async function selectSpan(id) {
     loadView();
   };
   content.append(focus);
+  const insight = html("button", "button detail-button", t9n("Analyze this span"));
+  insight.onclick = () => window.dispatchEvent(new CustomEvent("tracex:analyze",{detail:{scope:"span",span_id:s.id}}));
+  content.append(insight);
   requestAnimationFrame(renderViews);
 }
 async function jumpToSpan(id) {
   state.task = "all";
   state.kind = "all";
   state.query = id.toLowerCase();
+  state.searchIndex = 0;
+  state.searchLocate = true;
   $("#search").value = id;
   state.pageOffset = 0;
   state.rangeStart = 0;
@@ -1830,7 +1922,8 @@ async function jumpToSpan(id) {
 }
 function closeInspector() {
   state.selected = null;
-  $("#inspector").hidden = true;
+  window.dispatchEvent(new Event("tracex:selection"));
+  TraceXMotion.visible($("#inspector"), false);
   document.body.classList.remove("inspecting");
   if (state.profile) requestAnimationFrame(renderViews);
 }
@@ -1866,12 +1959,18 @@ $("#run-picker").onchange = async (e) => {
 $("#run-picker-mobile").onchange = $("#run-picker").onchange;
 $("#search").oninput = (e) => {
   state.query = e.target.value.trim().toLowerCase();
-  state.pageOffset = 0;
+  state.searchIndex = 0;
+  state.searchResult = null;
+  state.searchLocate = true;
+  ++state.request;
+  renderViews();
   clearTimeout(searchTimer);
   searchTimer = setTimeout(loadView, 160);
 };
 $("#kind-filter").onchange = (e) => {
   state.kind = e.target.value;
+  state.searchIndex = 0;
+  state.searchLocate = true;
   state.pageOffset = 0;
   loadView();
 };
@@ -2028,6 +2127,16 @@ window.addEventListener("tracex:open-run", async (event) => {
   }
 });
 {
+  const languageSwitch = $("#language-switch");
+  const compactNavigation = window.matchMedia("(max-width: 900px)");
+  const placeLanguageSwitch = () => {
+    const target = compactNavigation.matches
+      ? $(".sidebar")
+      : $(".header-actions");
+    target.append(languageSwitch);
+  };
+  compactNavigation.addEventListener("change", placeLanguageSwitch);
+  placeLanguageSwitch();
   const i18n = globalThis.TraceXI18n;
   for (const [code, name, label] of i18n.languages) {
     const button = html("button", code === i18n.language ? "selected" : "", label);
@@ -2039,4 +2148,3 @@ window.addEventListener("tracex:open-run", async (event) => {
     $("#language-switch").append(button);
   }
 }
-loadSource();

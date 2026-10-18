@@ -21,16 +21,20 @@ type Source struct {
 	Profile *profile.Profile
 }
 type Options struct {
-	WatchInterval time.Duration
-	Experiment    *experiment.Config
+	WatchInterval    time.Duration
+	Experiment       *experiment.Config
+	RunnerConfigPath string
+	Insight          *InsightConfig
 }
 type snapshot struct {
-	p         profile.Profile
-	analysis  any
-	byID      map[string]profile.Span
-	prefixEnd []float64
-	revision  uint64
-	sweep     []profile.SweepTask
+	insightOnce sync.Once
+	insights    profile.Insights
+	p           profile.Profile
+	analysis    any
+	byID        map[string]profile.Span
+	prefixEnd   []float64
+	revision    uint64
+	sweep       []profile.SweepTask
 }
 type mounted struct {
 	source         Source
@@ -50,16 +54,19 @@ type notice struct {
 	Sequence uint64 `json:"-"`
 }
 type workspace struct {
-	mu         sync.RWMutex
-	refreshMu  sync.Mutex
-	experiment *experiment.Manager
-	sourceJobs map[string]string
-	mounts     []*mounted
-	interval   time.Duration
-	seq        uint64
-	history    []notice
-	listeners  map[chan notice]bool
-	ctx        context.Context
+	insightConfig    *InsightConfig
+	insightBusy      chan struct{}
+	mu               sync.RWMutex
+	refreshMu        sync.Mutex
+	experiment       *experiment.Manager
+	runnerConfigPath string
+	sourceJobs       map[string]string
+	mounts           []*mounted
+	interval         time.Duration
+	seq              uint64
+	history          []notice
+	listeners        map[chan notice]bool
+	ctx              context.Context
 }
 
 func NewWorkspace(ctx context.Context, sources []Source, opts Options) (http.Handler, error) {
@@ -69,7 +76,7 @@ func NewWorkspace(ctx context.Context, sources []Source, opts Options) (http.Han
 	if opts.WatchInterval < 0 {
 		return nil, fmt.Errorf("negative watch interval")
 	}
-	ws := &workspace{interval: opts.WatchInterval, listeners: map[chan notice]bool{}, sourceJobs: map[string]string{}, ctx: ctx}
+	ws := &workspace{interval: opts.WatchInterval, listeners: map[chan notice]bool{}, sourceJobs: map[string]string{}, ctx: ctx, insightConfig: opts.Insight, insightBusy: make(chan struct{}, 1), runnerConfigPath: opts.RunnerConfigPath}
 	for _, src := range sources {
 		loader := profile.NewLoader(src.Path)
 		p := profile.Profile{}
@@ -94,15 +101,18 @@ func NewWorkspace(ctx context.Context, sources []Source, opts Options) (http.Han
 		m.events = newEventTail(eventPath(src.Path))
 		ws.mounts = append(ws.mounts, m)
 	}
-	if opts.Experiment != nil {
-		cfg := *opts.Experiment
+	{
+		cfg := experiment.Config{}
+		if opts.Experiment != nil {
+			cfg = *opts.Experiment
+		}
 		cfg.OnArtifacts = ws.addSource
 		manager, err := experiment.New(ctx, cfg)
 		if err != nil {
 			return nil, err
 		}
 		ws.experiment = manager
-		if ws.interval == 0 {
+		if ws.interval == 0 && (opts.Experiment != nil || opts.RunnerConfigPath != "") {
 			ws.interval = time.Second
 		}
 	}
@@ -321,6 +331,10 @@ func (ws *workspace) query(w http.ResponseWriter, r *http.Request) {
 		ws.reply(w, r, map[string]any{"span": span, "edges": edges, "resource_stats": stats})
 	case "/api/view":
 		ws.view(w, r, s, id)
+	case "/api/find":
+		ws.find(w, r, s)
+	case "/api/insights":
+		ws.insightReport(w, r, s)
 	case "/api/sweep":
 		ws.reply(w, r, map[string]any{"run_id": id, "name": s.p.Name, "configuration": s.p.Configuration, "revision": s.revision, "tasks": s.sweep})
 	}

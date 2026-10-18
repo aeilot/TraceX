@@ -22,16 +22,18 @@ type Config struct {
 	OnArtifacts                              func(string, string) (string, error)
 }
 type Preset struct {
-	ID              string   `json:"id"`
-	Name            string   `json:"name"`
-	Workload        string   `json:"workload"`
-	Harness         string   `json:"harness"`
-	Model           string   `json:"model"`
-	Backend         string   `json:"backend"`
-	Tasks           []string `json:"tasks"`
-	Concurrency     int      `json:"concurrency"`
-	LoopDuration    string   `json:"loop_duration,omitempty"`
-	ArrivalSchedule bool     `json:"arrival_schedule"`
+	ModelSettings   ModelSettings `json:"model_settings"`
+	ModelEditable   bool          `json:"model_editable"`
+	ID              string        `json:"id"`
+	Name            string        `json:"name"`
+	Workload        string        `json:"workload"`
+	Harness         string        `json:"harness"`
+	Model           string        `json:"model"`
+	Backend         string        `json:"backend"`
+	Tasks           []string      `json:"tasks"`
+	Concurrency     int           `json:"concurrency"`
+	LoopDuration    string        `json:"loop_duration,omitempty"`
+	ArrivalSchedule bool          `json:"arrival_schedule"`
 }
 type Catalog struct {
 	Enabled  bool     `json:"enabled"`
@@ -42,11 +44,12 @@ type Catalog struct {
 	Profiles []Preset `json:"profiles"`
 }
 type Request struct {
-	ProfileID         string   `json:"profile_id"`
-	Action            string   `json:"action"`
-	Tasks             []string `json:"tasks,omitempty"`
-	Concurrency       int      `json:"concurrency,omitempty"`
-	ConfirmModelCalls bool     `json:"confirm_model_calls"`
+	Model             *ModelSettings `json:"model,omitempty"`
+	ProfileID         string         `json:"profile_id"`
+	Action            string         `json:"action"`
+	Tasks             []string       `json:"tasks,omitempty"`
+	Concurrency       int            `json:"concurrency,omitempty"`
+	ConfirmModelCalls bool           `json:"confirm_model_calls"`
 }
 type Job struct {
 	ID               string     `json:"id"`
