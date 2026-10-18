@@ -113,7 +113,7 @@ func empty() Profile {
 }
 func validTime(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) && v >= 0 }
 
-var allowedAttributes = map[string]bool{"model": true, "gen_ai.request.model": true, "gen_ai.usage.input_tokens": true, "gen_ai.usage.output_tokens": true, "tool.name": true, "exit_code": true, "synthetic": true, "phase": true, "time_quality": true, "backend": true, "harness": true, "provider": true, "resource_type": true, "http_status": true, "page": true, "agent.id": true, "bridge_role": true}
+var allowedAttributes = map[string]bool{"model": true, "gen_ai.request.model": true, "gen_ai.usage.input_tokens": true, "gen_ai.usage.output_tokens": true, "tool.name": true, "exit_code": true, "synthetic": true, "phase": true, "time_quality": true, "backend": true, "harness": true, "provider": true, "resource_type": true, "http_status": true, "page": true, "agent.id": true, "bridge_role": true, "suspend_reason": true, "pause_latency_ms": true, "unpause_latency_ms": true}
 
 func filterAttributes(attrs map[string]any) map[string]any {
 	out := map[string]any{}

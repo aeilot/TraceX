@@ -447,6 +447,7 @@
     Model: "模型",
     Tool: "工具",
     Browser: "浏览器",
+    Suspended: "已挂起",
     "Explicit parent, spawn, call, return, dependency & join edges": "显式的父子、派生、调用、返回、依赖和汇合边",
     "TIME WINDOW": "时间窗口",
     From: "从",

@@ -9,6 +9,7 @@
   --tool: #d79a45;
   --browser: #4998bf;
   --evaluation: #87978a;
+  --suspended: #b9b3e6;
   --sidebar: #162f31;
 }
 * {
@@ -531,6 +532,9 @@ select {
 }
 .legend-dot.evaluation {
   background: var(--evaluation);
+}
+.legend-dot.suspended {
+  background: var(--suspended);
 }
 .legend .legend-explanation {
   margin-left: auto;

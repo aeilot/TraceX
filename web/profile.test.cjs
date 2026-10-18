@@ -202,3 +202,16 @@ test("sweep samples and metrics reproduce the steady-window analysis", () => {
   assert.equal(steady.browser_local_p90_ms, 110);
   assert.equal(sweepMetrics([], {}).task_p50_ms, null);
 });
+test("suspended sandbox intervals are reported but never counted as work", () => {
+  const { analyze } = require("./profile.js");
+  const p = fixture();
+  p.spans[0].kind = "agent";
+  p.spans[1].kind = "tool";
+  p.spans.push({ id: "s", task_id: "t", name: "Sandbox paused", kind: "suspended", start_ms: 50, duration_ms: 40 });
+  const a = analyze(validate(p));
+  const suspended = a.kinds.find((k) => k.kind === "suspended");
+  assert.ok(suspended, "the suspended kind is listed");
+  assert.equal(suspended.union_ms, 40);
+  const coverage = a.coverage.find((c) => c.task_id === "t");
+  assert.equal(coverage.observed_ms, 30, "only the tool call is observed work");
+});

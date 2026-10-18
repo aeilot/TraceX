@@ -341,7 +341,7 @@
   const incomplete = (s) =>
     !!s.incomplete || s.attributes?.time_quality === "completion_only";
   const work = (s) =>
-    !["agent", "lifecycle"].includes(s.kind) && !incomplete(s);
+    !["agent", "lifecycle", "suspended"].includes(s.kind) && !incomplete(s);
   function critical(p) {
     const unavailable = {
       status: "unavailable",

@@ -273,6 +273,11 @@ func loadARIES(root string, cache *recordCache) (Profile, error) {
 			kind = "browser"
 		case "resources.jsonl":
 			kind = "resource"
+		case "suspend.jsonl":
+			if filepath.Base(filepath.Dir(path)) != "bridge" {
+				return nil
+			}
+			kind = "suspend"
 		case "index.json":
 			if filepath.Base(filepath.Dir(path)) != "monitor" {
 				return nil
@@ -405,6 +410,7 @@ func loadARIES(root string, cache *recordCache) (Profile, error) {
 			continue
 		}
 		state := trajectoryState{}
+		suspended := suspendState{}
 		bad, pending, readErr := readRecords(a.path, func(v map[string]any, line int) {
 			if len(spans)+len(resources) >= maxRecords {
 				evidenceLimited = true
@@ -413,6 +419,18 @@ func loadARIES(root string, cache *recordCache) (Profile, error) {
 			switch a.kind {
 			case "trajectory":
 				for _, x := range state.parse(v, a.task, line) {
+					observe(x.start)
+					spans = append(spans, x)
+				}
+			case "suspend":
+				x, ok, warning, bad := suspended.parse(v, a.task, line)
+				if bad {
+					invalid++
+				}
+				if warning != "" {
+					p.Warnings = appendUnique(p.Warnings, warning)
+				}
+				if ok {
 					observe(x.start)
 					spans = append(spans, x)
 				}
@@ -515,6 +533,9 @@ func loadARIES(root string, cache *recordCache) (Profile, error) {
 			}
 		})
 		invalid += bad
+		if suspended.open {
+			p.Warnings = appendUnique(p.Warnings, "A sandbox pause has no recorded unpause yet; that open interval is not shown.")
+		}
 		if pending {
 			p.Warnings = appendUnique(p.Warnings, "A trailing partial evidence record is pending and will be retried on refresh.")
 		}
@@ -703,6 +724,7 @@ func loadARIES(root string, cache *recordCache) (Profile, error) {
 	}
 	return p, nil
 }
+
 // cpuThrottling keeps a cgroup cpu.stat reading only when all counters are
 // present and consistent; a partial reading is unmeasured rather than zero.
 func cpuThrottling(v map[string]any) *CPUThrottling {

@@ -21,6 +21,7 @@ const colors = {
   network: "#5f97b0",
   evaluation: "#6b7d2a",
   lifecycle: "#8b887c",
+  suspended: "#b9b3e6",
   task: "#5d7f7a",
   other: "#9a968a",
 };

@@ -77,7 +77,12 @@ func unionMS(xs []interval) float64 {
 func incomplete(s Span) bool {
 	return s.Incomplete || s.Attributes["time_quality"] == "completion_only"
 }
-func leafWork(s Span) bool { return s.Kind != "agent" && s.Kind != "lifecycle" && !incomplete(s) }
+
+// leafWork excludes containers (agent, lifecycle) and suspended sandbox
+// intervals, which record frozen time rather than work.
+func leafWork(s Span) bool {
+	return s.Kind != "agent" && s.Kind != "lifecycle" && s.Kind != "suspended" && !incomplete(s)
+}
 func usageValue(s Span, input bool) *float64 {
 	if s.Usage != nil {
 		if input && s.Usage.InputTokens != nil {

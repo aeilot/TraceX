@@ -72,7 +72,7 @@ Select a workload and profile, choose declared tasks and concurrency, prepare pr
 
 | Source | Evidence |
 | --- | --- |
-| ARIES | Task/queue lifecycle, phase events, separate outcomes, sanitized comparison configuration, resource counters |
+| ARIES | Task/queue lifecycle, phase events, separate outcomes, sanitized comparison configuration, resource counters, and sandbox paused intervals from `bridge/suspend.jsonl` (`suspended` spans, excluded from work) |
 | Hermes | Retained OpenTelemetry spans, explicit parents, selected model usage and identity metadata |
 | OpenClaw | Native sessions, explicitly matched tool-call intervals, model completion usage, and bridge evidence |
 | BrowserBench | Browser request/page intervals; URL, body, and query content omitted |
