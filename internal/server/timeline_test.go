@@ -44,10 +44,22 @@ func TestTimelineCoversEverySpanWithoutPages(t *testing.T) {
 			t.Fatal("a resolvable span was merged")
 		}
 	}
+	// A slice keeps the whole window's lanes and rows but only nearby items.
+	full, fullItems := layout("/api/timeline?width=100000")
+	slice, sliceItems := layout("/api/timeline?width=100000&from_ms=50000&to_ms=51000")
+	if len(sliceItems) == 0 || len(sliceItems) >= len(fullItems)/10 || len(slice["lanes"].([]any)) != len(full["lanes"].([]any)) {
+		t.Fatalf("slice items = %d of %d", len(sliceItems), len(fullItems))
+	}
+	for _, x := range sliceItems {
+		it := x.(map[string]any)
+		if it["start_ms"].(float64) > 51000 || it["start_ms"].(float64)+it["duration_ms"].(float64) < 50000 {
+			t.Fatalf("item outside the slice: %+v", it)
+		}
+	}
 	if l, _ = layout("/api/timeline?kind=model&width=1000"); l["spans"].(float64) != 0 {
 		t.Fatal("kind filter ignored")
 	}
-	for _, bad := range []string{"/api/timeline?width=0", "/api/timeline?start_ms=10&end_ms=5", "/api/timeline?width=x"} {
+	for _, bad := range []string{"/api/timeline?width=0", "/api/timeline?start_ms=10&end_ms=5", "/api/timeline?width=x", "/api/timeline?from_ms=9&to_ms=1"} {
 		r := requestStatus(ws, bad)
 		if r != 400 {
 			t.Fatalf("%s: status %d", bad, r)

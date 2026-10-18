@@ -28,14 +28,14 @@ test("match navigation respects task/type/time context and stable order", () => 
 test("an investigation link restores source identity, Unicode filters, span and viewport", () => {
   const investigation = {page:"profiler", run:"20261017/run & baseline", task:"研究/42", kind:"model",
     query:"tool & agent", runtime:"runtime/1", selected:"task/span?x=1", view:"split",
-    rangeStart:1200.25, rangeEnd:9200, zoom:2.5, pageOffset:500, pageLimit:50, baseline:"", candidate:""};
+    rangeStart:1200.25, rangeEnd:9200, zoom:2.5, pageOffset:500, baseline:"", candidate:""};
   assert.deepEqual(parse(serialize(investigation)), investigation);
 });
 
 test("invalid shared ranges and unsupported paging cannot create an unusable view", () => {
   const s = parse("#page=unknown&from=900&to=20&zoom=Infinity&offset=-1&limit=999999&view=unknown");
   assert.equal(s.page,"experiments"); assert.equal(s.rangeStart,0); assert.equal(s.rangeEnd,null);
-  assert.equal(s.zoom,1); assert.equal(s.pageOffset,0); assert.equal(s.pageLimit,250); assert.equal(s.view,"timeline");
+  assert.equal(s.zoom,1); assert.equal(s.pageOffset,0); assert.equal(s.pageLimit,undefined); assert.equal(s.view,"timeline");
   assert.equal(parse("#from=NaN&to=-20").rangeEnd,null);
 });
 

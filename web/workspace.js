@@ -211,8 +211,8 @@
     restored = s;
     restoring = true;
     Object.assign(state, {task:s.task, kind:s.kind, query:s.query, runtime:s.runtime, selected:s.selected,
-      searchIndex:0, searchLocate:true, searchResult:null, view:s.view, rangeStart:s.rangeStart, rangeEnd:s.rangeEnd, zoom:s.zoom, pageOffset:s.pageOffset, pageLimit:s.pageLimit, restoreRun:s.run});
-    $("#search").value = s.query; $("#zoom").value = s.zoom; $("#page-size").value = s.pageLimit;
+      searchIndex:0, searchLocate:true, searchResult:null, view:s.view, rangeStart:s.rangeStart, rangeEnd:s.rangeEnd, zoom:s.zoom, pageOffset:s.pageOffset, restoreRun:s.run});
+    $("#search").value = s.query; showZoom();
     navigate(s.page, {historyEntry:false});
   }
   window.addEventListener("popstate", () => { const s = model.parse(location.hash); restore(s); loadSource(); });

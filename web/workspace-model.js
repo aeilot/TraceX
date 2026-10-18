@@ -19,9 +19,8 @@
       view: ["split", "dag", "timeline"].includes(p.get("view")) ? p.get("view") : "timeline",
       rangeStart: end != null && end <= start ? 0 : start,
       rangeEnd: end != null && end <= start ? null : end,
-      zoom: number("zoom", 1, 1, 8),
+      zoom: number("zoom", 1, 1, 64),
       pageOffset: Math.floor(number("offset", 0, 0, Number.MAX_SAFE_INTEGER)),
-      pageLimit: [50, 250, 500].includes(Number(p.get("limit"))) ? Number(p.get("limit")) : 250,
       baseline: p.get("baseline") || "", candidate: p.get("candidate") || "",
     };
   }
@@ -33,7 +32,7 @@
     add("run", s.run); add("task", s.task, "all"); add("kind", s.kind, "all");
     add("q", s.query); add("runtime", s.runtime, "all"); add("span", s.selected);
     add("view", s.view, "timeline"); add("from", s.rangeStart, 0); add("to", s.rangeEnd);
-    add("zoom", s.zoom, 1); add("offset", s.pageOffset, 0); add("limit", s.pageLimit, 250);
+    add("zoom", s.zoom, 1); add("offset", s.pageOffset, 0);
     add("baseline", s.baseline); add("candidate", s.candidate);
     return "#" + p.toString();
   }

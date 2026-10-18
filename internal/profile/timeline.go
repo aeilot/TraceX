@@ -125,6 +125,19 @@ func LayoutTimeline(spans []Span, start, end, width float64) TimelineLayout {
 	return out
 }
 
+// Slice keeps the full layout's lanes and rows but only the items overlapping
+// [from, to], so a zoomed-in timeline draws what is near the viewport while
+// lanes and rows stay where the whole window put them.
+func (l TimelineLayout) Slice(from, to float64) TimelineLayout {
+	out := TimelineLayout{Lanes: l.Lanes, Items: []TimelineItem{}, Spans: l.Spans}
+	for _, it := range l.Items {
+		if it.StartMS <= to && it.StartMS+it.DurationMS >= from {
+			out.Items = append(out.Items, it)
+		}
+	}
+	return out
+}
+
 func dominant(kinds map[string]int) string {
 	names := make([]string, 0, len(kinds))
 	for k := range kinds {

@@ -400,11 +400,15 @@
                   <input
                     id="zoom"
                     type="range"
-                    min="1"
-                    max="8"
-                    step="0.5"
-                    value="1"
-                    aria-label="Timeline zoom" /></label
+                    min="0"
+                    max="6"
+                    step="0.25"
+                    value="0"
+                    aria-label="Timeline zoom" /><output
+                    id="zoom-value"
+                    for="zoom"
+                    >×1</output
+                  ></label
                 ><button id="reset-time" class="button subtle small">
                   Reset
                 </button>
@@ -429,17 +433,6 @@
             <div>
               <strong id="page-label">—</strong
               ><small id="edge-coverage"></small>
-            </div>
-            <div class="page-controls">
-              <label
-                >Page size
-                <select id="page-size" aria-label="Spans per page">
-                  <option>50</option>
-                  <option selected>250</option>
-                  <option>500</option>
-                </select></label
-              ><button id="page-prev" class="button small">← Previous</button
-              ><button id="page-next" class="button small">Next →</button>
             </div>
           </div>
         </section>

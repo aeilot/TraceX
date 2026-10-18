@@ -90,18 +90,14 @@ async function smoke(page, baseURL = "http://127.0.0.1:4318") {
       document.querySelector("#run-name").textContent ===
       "Synthetic pagination check",
   );
-  assert.match(await page.locator("#page-label").innerText(), /1–250 of 630/);
-  await page.locator("#page-next").click();
+  // The DAG draws the first 500 spans of the window; the timeline draws all.
+  assert.match(await page.locator("#page-label").innerText(), /1–500 of 630/);
   await page.waitForFunction(() =>
-    document.querySelector("#page-label").textContent.includes("251–500"),
-  );
-  await page.locator("#page-size").selectOption("50");
-  await page.waitForFunction(() =>
-    document.querySelector("#page-label").textContent.includes("1–50"),
+    document.querySelector("#timeline-count").textContent === "630",
   );
   await page.locator("#search").fill("page-span-0629");
   await page.waitForFunction(
-    () => document.querySelectorAll(".timeline-bar.search-match").length === 1 && document.querySelector("#page-label").textContent.includes("601–630"),
+    () => document.querySelectorAll(".timeline-bar.search-match").length === 1 && document.querySelector("#page-label").textContent.includes("501–630"),
   );
   const downloaded = page.waitForEvent("download");
   await page.locator("#export-button").click();

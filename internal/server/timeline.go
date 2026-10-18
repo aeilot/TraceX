@@ -11,7 +11,8 @@ import (
 // timeline lays out every span matching the window and filters for one plot
 // width. Unlike /api/view it is not paginated: spans too small to tell apart
 // at that width are merged into clusters, which bounds the response by the
-// plot size rather than by the run's span count.
+// plot size rather than by the run's span count. from_ms and to_ms return
+// only the items near a zoomed-in viewport, with the full window's lanes.
 func (ws *workspace) timeline(w http.ResponseWriter, r *http.Request, s *snapshot, id string) {
 	start, e := numeric(r, "start_ms", 0)
 	if e != nil {
@@ -28,7 +29,18 @@ func (ws *workspace) timeline(w http.ResponseWriter, r *http.Request, s *snapsho
 		ws.fail(w, r, 400, "invalid width")
 		return
 	}
-	width = min(width, 20000)
+	// 64x zoom of a wide screen; only the requested slice is returned.
+	width = min(width, 500000)
+	from, e := numeric(r, "from_ms", start)
+	if e != nil {
+		ws.fail(w, r, 400, e.Error())
+		return
+	}
+	to, e := numeric(r, "to_ms", end)
+	if e != nil || to < from {
+		ws.fail(w, r, 400, "invalid slice")
+		return
+	}
 	task, kind := r.URL.Query().Get("task"), r.URL.Query().Get("kind")
 	first := sort.Search(len(s.prefixEnd), func(i int) bool { return s.prefixEnd[i] >= start })
 	last := sort.Search(len(s.p.Spans), func(i int) bool { return s.p.Spans[i].StartMS > end })
@@ -39,6 +51,6 @@ func (ws *workspace) timeline(w http.ResponseWriter, r *http.Request, s *snapsho
 		}
 		matches = append(matches, v)
 	}
-	layout := profile.LayoutTimeline(matches, start, end, width)
-	ws.reply(w, r, map[string]any{"run_id": id, "revision": s.revision, "start_ms": start, "end_ms": end, "width": width, "layout": layout})
+	layout := profile.LayoutTimeline(matches, start, end, width).Slice(from, to)
+	ws.reply(w, r, map[string]any{"run_id": id, "revision": s.revision, "start_ms": start, "end_ms": end, "width": width, "from_ms": from, "to_ms": to, "layout": layout})
 }

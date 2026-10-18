@@ -44,7 +44,8 @@ const state = {
   runtime: "all",
   imported: false,
   pageOffset: 0,
-  pageLimit: 250,
+  // The DAG draws at most this many spans of the window; the timeline has no limit.
+  pageLimit: 500,
   totalSpans: 0,
   hiddenEdges: 0,
   rangeStart: 0,
@@ -273,7 +274,7 @@ function resetFilters() {
   state.rangeStart = 0;
   state.rangeEnd = null;
   $("#search").value = "";
-  $("#zoom").value = 1;
+  showZoom();
   closeInspector();
 }
 async function loadSource() {
@@ -571,15 +572,14 @@ function render() {
   const b = bounds();
   $("#range-start").value = Number((b.start / 1000).toFixed(3));
   $("#range-end").value = Number((b.end / 1000).toFixed(3));
-  $("#page-label").textContent = state.totalSpans
-    ? t9n("DAG page") + " · " + t9n("{first}–{last} of {total} matching spans", { first: state.pageOffset + 1, last: Math.min(state.pageOffset + state.pageLimit, state.totalSpans), total: state.totalSpans.toLocaleString() })
-    : t9n("No matching spans");
+  $("#page-label").textContent = !state.totalSpans
+    ? t9n("No matching spans")
+    : state.totalSpans <= state.pageLimit
+      ? t9n("DAG shows all {total} spans in this window", { total: state.totalSpans.toLocaleString() })
+      : t9n("DAG shows spans {first}–{last} of {total} in this window; narrow the window or filter to see the rest", { first: state.pageOffset + 1, last: Math.min(state.pageOffset + state.pageLimit, state.totalSpans), total: state.totalSpans.toLocaleString() });
   $("#edge-coverage").textContent = state.hiddenEdges
     ? t9n("{count} relationships cross this page; inspect a node to follow neighbors.", { count: state.hiddenEdges })
     : t9n("All relationships between visible spans are shown.");
-  $("#page-prev").disabled = state.pageOffset === 0;
-  $("#page-next").disabled =
-    state.pageOffset + state.pageLimit >= state.totalSpans;
   renderAnalysis();
   renderViews();
   window.dispatchEvent(new Event("tracex:render"));
@@ -1309,18 +1309,36 @@ function timelineGeometry() {
     baseWidth = Math.max(500, $("#timeline-scroll").clientWidth - labelWidth - 25);
   return { labelWidth, plotWidth: baseWidth * state.zoom };
 }
-let timelineTimer;
+let timelineTimer, timelineScrollTimer;
+// The visible time range of the timeline, and the range to fetch: one
+// viewport on each side, so a zoomed-in timeline loads only what is near.
+function timelineRanges(b, plotWidth) {
+  const scroller = $("#timeline-scroll"),
+    { labelWidth } = timelineGeometry(),
+    toTime = (px) => b.start + (Math.min(plotWidth, Math.max(0, px)) / plotWidth) * b.duration,
+    left = scroller.scrollLeft - labelWidth,
+    right = left + scroller.clientWidth;
+  return {
+    visible: [toTime(left), toTime(right)],
+    fetch: [toTime(left - scroller.clientWidth), toTime(right + scroller.clientWidth)],
+  };
+}
 function loadTimeline() {
   if (!state.profile || $("#timeline-panel").hidden) return;
   const { plotWidth } = timelineGeometry(),
     b = bounds(),
-    key = [state.runKey, state.revision, state.task, state.kind, b.start, b.end, Math.round(plotWidth)].join("|");
-  if (state.timeline && state.timelineKey === key) return drawTimeline();
+    key = [state.runKey, state.revision, state.task, state.kind, b.start, b.end, Math.round(plotWidth)].join("|"),
+    ranges = timelineRanges(b, plotWidth),
+    have = state.timeline?.slice;
+  if (state.timeline && state.timelineKey === key && have[0] <= ranges.visible[0] && have[1] >= ranges.visible[1]) {
+    if (state.timelineDrawn !== key + "|" + have.join("|")) drawTimeline();
+    return;
+  }
   if (state.timeline) drawTimeline();
   clearTimeout(timelineTimer);
-  timelineTimer = setTimeout(() => fetchTimeline(key, b, plotWidth), state.timeline ? 120 : 0);
+  timelineTimer = setTimeout(() => fetchTimeline(key, b, plotWidth, ranges.fetch), state.timeline ? 120 : 0);
 }
-async function fetchTimeline(key, b, plotWidth) {
+async function fetchTimeline(key, b, plotWidth, slice) {
   const request = ++state.timelineRequest;
   try {
     const local = state.imports.get(state.runKey);
@@ -1336,14 +1354,15 @@ async function fetchTimeline(key, b, plotWidth) {
         )
         .sort((x, y) => x.start_ms - y.start_ms);
       layout = timelineLayout(spans, b.start, b.end, plotWidth);
+      layout.items = layout.items.filter((it) => it.start_ms <= slice[1] && it.start_ms + it.duration_ms >= slice[0]);
     } else {
-      const params = new URLSearchParams({ run: state.runKey, start_ms: b.start, end_ms: b.end, width: Math.round(plotWidth) });
+      const params = new URLSearchParams({ run: state.runKey, start_ms: b.start, end_ms: b.end, width: Math.round(plotWidth), from_ms: slice[0], to_ms: slice[1] });
       if (state.task !== "all") params.set("task", state.task);
       if (state.kind !== "all") params.set("kind", state.kind);
       layout = (await json("/api/timeline?" + params)).layout;
     }
     if (request !== state.timelineRequest) return;
-    state.timeline = { layout };
+    state.timeline = { layout, slice };
     state.timelineKey = key;
     drawTimeline();
   } catch (e) {
@@ -1357,6 +1376,7 @@ function drawTimeline() {
     total = bounds().duration;
   const width = labelWidth + plotWidth + 25;
   const layout = state.timeline?.layout || { lanes: [], items: [], spans: 0 };
+  state.timelineDrawn = state.timelineKey + "|" + (state.timeline?.slice || []).join("|");
   $("#timeline-count").textContent = layout.spans.toLocaleString();
   let y = 38;
   const lanes = layout.lanes.map((l) => {
@@ -2034,7 +2054,7 @@ function applyRange(start, end) {
   state.rangeEnd = end;
   state.pageOffset = 0;
   state.zoom = 1;
-  $("#zoom").value = 1;
+  showZoom();
   loadView();
 }
 // Full screen covers the viewport with the explorer. The whole page enters
@@ -2110,13 +2130,31 @@ $("#resource-filter").onchange = (e) => {
   state.runtime = e.target.value;
   loadView();
 };
+// The zoom slider is logarithmic: 0..6 is 1x..64x. Zooming keeps the time at
+// the viewport's center in place.
+function showZoom() {
+  $("#zoom").value = Math.log2(state.zoom);
+  $("#zoom-value").textContent = `×${state.zoom < 10 ? Number(state.zoom.toFixed(1)) : Math.round(state.zoom)}`;
+}
 $("#zoom").oninput = (e) => {
-  state.zoom = Number(e.target.value);
+  const scroller = $("#timeline-scroll"),
+    { labelWidth, plotWidth } = timelineGeometry(),
+    center = (scroller.scrollLeft + scroller.clientWidth / 2 - labelWidth) / plotWidth;
+  state.zoom = 2 ** Number(e.target.value);
+  showZoom();
+  const next = timelineGeometry().plotWidth;
   renderViews();
+  scroller.scrollLeft = Math.max(0, labelWidth + center * next - scroller.clientWidth / 2);
+  // Fetch for the new scroll position now rather than relying on a scroll event.
+  loadTimeline();
 };
+$("#timeline-scroll").addEventListener("scroll", () => {
+  clearTimeout(timelineScrollTimer);
+  timelineScrollTimer = setTimeout(loadTimeline, 80);
+});
 $("#reset-time").onclick = () => {
   state.zoom = 1;
-  $("#zoom").value = 1;
+  showZoom();
   $("#timeline-scroll").scrollLeft = 0;
   renderViews();
 };
@@ -2128,19 +2166,6 @@ $("#apply-range").onclick = () =>
 $("#full-range").onclick = () => {
   state.rangeStart = 0;
   state.rangeEnd = null;
-  state.pageOffset = 0;
-  loadView();
-};
-$("#page-prev").onclick = () => {
-  state.pageOffset = Math.max(0, state.pageOffset - state.pageLimit);
-  loadView();
-};
-$("#page-next").onclick = () => {
-  state.pageOffset += state.pageLimit;
-  loadView();
-};
-$("#page-size").onchange = (e) => {
-  state.pageLimit = Number(e.target.value);
   state.pageOffset = 0;
   loadView();
 };
