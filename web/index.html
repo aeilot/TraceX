@@ -29,6 +29,9 @@
     <script src="/workspace.js" defer></script>
     <script src="/insights.js" defer></script>
     <link rel="stylesheet" href="/insights.css" />
+    <script src="/scheduling-model.js" defer></script>
+    <script src="/scheduling.js" defer></script>
+    <link rel="stylesheet" href="/scheduling.css" />
   </head>
   <body>
     <aside class="sidebar">
@@ -155,7 +158,7 @@
           <div class="library-controls"><label>Search experiments<input id="experiment-search" type="search" placeholder="Name, model, harness…" /></label><label>Source state<select id="experiment-state"><option value="all">All sources</option><option value="live">Live sources</option><option value="snapshot">Snapshots</option><option value="error">Source errors</option></select></label><button id="library-compare" class="button" disabled>Compare selected</button></div>
           <p id="library-selection" role="status"></p><div id="experiment-library" class="table-scroll"></div>
         </section>
-        <nav id="run-tabs" class="run-tabs" aria-label="Run workspace" hidden><button data-page="summary">Overview</button><button data-page="profiler">Profiler</button><button data-page="insights">Insights</button><button data-page="tasks">Tasks</button><button data-page="configuration">Configuration</button><button data-page="evidence">Evidence</button><button id="copy-view-link" class="button">Copy view link</button></nav>
+        <nav id="run-tabs" class="run-tabs" aria-label="Run workspace" hidden><button data-page="summary">Overview</button><button data-page="profiler">Profiler</button><button data-page="insights">Insights</button><button data-page="scheduling">Scheduling</button><button data-page="tasks">Tasks</button><button data-page="configuration">Configuration</button><button data-page="evidence">Evidence</button><button id="copy-view-link" class="button">Copy view link</button></nav>
         <section id="tasks-workspace" class="workspace-card" aria-label="Task results" hidden><div class="workspace-card-heading"><div><h2>Task results</h2><p>Find slow or failed tasks, then inspect their execution.</p></div></div><div class="library-controls"><label>Search tasks<input id="task-search" type="search" placeholder="Task name or ID…" /></label><label>Task status<select id="task-status"><option value="all">All statuses</option><option value="failed">Failed or canceled</option><option value="succeeded">Succeeded</option></select></label><label>Sort tasks<select id="task-sort"><option value="slowest">Slowest first</option><option value="name">Name</option><option value="score">Lowest score first</option></select></label></div><div id="task-results" class="table-scroll"></div></section>
         <section id="configuration-workspace" class="workspace-card" aria-label="Recorded configuration" hidden><div class="workspace-card-heading"><div><h2>Recorded configuration</h2><p>Only conditions recorded by the source are shown.</p></div></div><div id="run-configuration" class="table-scroll"></div></section>
         <section id="sources-workspace" class="workspace-card" aria-label="Sources and runner" hidden><div class="workspace-card-heading"><div><h2>Sources &amp; runner</h2><p>Inspect mounted sources and the configured execution target.</p></div><button id="refresh-runner" class="button">Check runner</button></div><div id="runner-summary" role="status"></div><div id="source-results" class="table-scroll"></div></section>
@@ -195,6 +198,20 @@
           </div>
         </section>
         <section id="insight-overview" class="workspace-card" hidden><div class="workspace-card-heading"><div><h2>Automatic diagnostics</h2><p>Measured findings with links to the underlying evidence.</p></div><button id="open-insights" class="button">View all insights</button></div><div id="overview-findings" class="finding-grid"></div></section>
+        <section id="scheduling-workspace" class="workspace-card" aria-label="Scheduling workspace" hidden>
+          <div class="workspace-card-heading"><div><h2>Scheduling analysis</h2><p>Which occurrences overlapped, queued, waited on models and tools or were paused, and which slowed down. Drag across any chart to select one window for every panel.</p></div>
+            <div class="scheduling-tools"><button class="button small scheduling-back" type="button">← Previous window</button><button class="button small subtle scheduling-reset" type="button">Whole run</button>
+              <label>Sort <select class="scheduling-sort"><option value="start">By start</option><option value="queue">By queue time</option><option value="duration">By duration</option><option value="slowdown">By slowdown</option></select></label></div></div>
+          <div class="scheduling-body">
+            <p class="scheduling-status" role="status"></p>
+            <h3 class="scheduling-heading">Concurrency</h3><div class="scheduling-concurrency"></div>
+            <h3 class="scheduling-heading">Occurrence lanes <small>Lifecycle (top) and model, tool and pause work (bottom)</small></h3><div class="scheduling-lane-panel"></div>
+            <h3 class="scheduling-heading">Shared resources <small>Task-owned and shared runtimes; no host identity is recorded</small></h3>
+            <div class="scheduling-cpu"></div><div class="scheduling-memory"></div><div class="scheduling-throttle"></div>
+            <h3 class="scheduling-heading">Interval impact</h3><div class="scheduling-impact"></div>
+            <ul class="scheduling-notes"></ul>
+          </div>
+        </section>
         <section id="insights-workspace" class="workspace-card" aria-label="Insights workspace" hidden>
           <div class="workspace-card-heading"><div><h2>Insights</h2><p>Inspect evidence, compare tasks and record your conclusions.</p></div><button id="refresh-insights" class="button">Refresh insights</button></div>
           <div class="insight-controls"><label>Analysis scope<select id="insight-scope"><option value="run">Full run</option><option value="window">Current time window</option><option value="span" disabled>Selected span interval</option><option value="comparison" disabled>Compared runs</option></select></label><span id="insight-scope-label"></span></div><p id="insight-status" role="status"></p>

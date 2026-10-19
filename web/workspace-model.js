@@ -1,7 +1,7 @@
 /* Shareable investigation state. Run identities refer to source IDs, not mount order. */
 (function (root) {
   "use strict";
-  const pages = ["experiments", "summary", "insights", "profiler", "tasks", "configuration", "evidence", "compare", "sources"];
+  const pages = ["experiments", "summary", "insights", "scheduling", "profiler", "tasks", "configuration", "evidence", "compare", "sources"];
   function parse(hash) {
     const p = new URLSearchParams(hash.replace(/^#/, ""));
     const number = (key, fallback, min, max) => {

@@ -7,14 +7,15 @@
   const updateRunTabs = TraceXMotion.tabs($("#run-tabs"), "[data-page]");
   const updateViewTabs = TraceXMotion.tabs($(".explorer-toolbar .view-tabs"), "[data-view]");
   const selectedRuns = new Set();
-  const runPages = ["summary", "insights", "profiler", "tasks", "configuration", "evidence"];
+  const runPages = ["summary", "insights", "scheduling", "profiler", "tasks", "configuration", "evidence"];
   const names = {
-    experiments: "Experiments", insights: "Insights", summary: "Overview", profiler: "Profiler",
+    experiments: "Experiments", insights: "Insights", scheduling: "Scheduling", summary: "Overview", profiler: "Profiler",
     tasks: "Tasks", configuration: "Configuration", evidence: "Evidence",
     compare: "Compare", sources: "Sources & runner",
   };
   const descriptions = {
     insights: "Inspect evidence, compare tasks and record your conclusions.",
+    scheduling: "Find which occurrences competed in a window and which slowed down.",
     experiments: "Open a run to investigate, or select two runs to compare.",
     summary: "Run metrics, work breakdown and recorded critical path.",
     profiler: "Explore execution and resource signals in one workspace.",
@@ -52,6 +53,7 @@
     show(".analysis-card", ["summary"]);
     show("#insight-overview", ["summary"]);
     show("#insights-workspace", ["insights"]);
+    show("#scheduling-workspace", ["scheduling"]);
     show(".comparison-card", ["compare"]);
     show(".explorer", ["profiler"]);
     show(".resources-card", ["profiler"]);

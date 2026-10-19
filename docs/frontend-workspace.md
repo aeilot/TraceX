@@ -94,3 +94,9 @@ Verification: the complete check passed with 71 JavaScript tests, Go tests, race
 Timeline dragging is now fixed to region zoom. The Pan / Zoom to region switch has been removed; a static label and crosshair indicate the behavior. No Shift modifier is required. Explicit time navigation, wheel navigation and zoom/reset controls remain available. Resource-chart region selection and DAG background dragging retain their own behavior.
 
 Verification: direct native dragging narrowed the timeline from 4m 30.2s–13m 30.7s to 6m 5.6s–8m 24.4s without selecting text; no mode-switch controls remain. All 71 JavaScript tests and the embedded binary build passed.
+
+## Scheduling workspace
+
+The Scheduling run tab implements P0 of [the scheduling analysis plan](scheduling-analysis-plan.md). Concurrency curves, occurrence lanes, resource charts and the interval impact table share one window: dragging across any chart narrows it for all of them, and Previous window and Whole run step back. Selecting an occurrence highlights it and dims, but keeps, its competitors; pinned occurrences stay at the top of the lanes. Evidence buttons open the profiler on the queue, model, tool, pause or failure span.
+
+`GET /api/scheduling?run=&start_ms=&end_ms=&bins=&width=&pinned=&lanes=` projects the whole snapshot, independent of the DAG page, and is cached per revision and query; browser imports run the same projection in `scheduling-model.js`. Lanes are task occurrences because traces record no agent instance. Unrecorded phases appear as unknown; queue depth exists only when queue spans are recorded; model calls and pauses never count as CPU. Runtimes are grouped as task-owned or shared because no host or resource-pool identity is recorded. The slowdown column compares a completed occurrence with the median of at least three other completed occurrences of the same task in the same run, and is not a controlled baseline.

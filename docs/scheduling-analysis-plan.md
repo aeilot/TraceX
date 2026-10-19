@@ -52,6 +52,8 @@ CPU throttling supports quota enforcement, while confirming host competition req
 
 ### P0: make current traces useful
 
+Status: implemented on `feat/scheduling-workspace` (Scheduling run tab, `/api/scheduling`, `profile.Schedule`, `web/scheduling-model.js`). Comparison intervals and linked/unlinked zoom with the profiler are not yet implemented.
+
 - Add Scheduling workspace, shared brush, task-instance lanes, pin/highlight and recorded runtime grouping.
 - Compute admission queue intervals only when queue spans exist; show model/tool concurrency, explicit pauses and existing throttling alongside resources.
 - Add full-scope interval impact and evidence links. Do not derive global concurrency or queue counts from the current 500-span DAG page.

@@ -331,6 +331,8 @@ func (ws *workspace) query(w http.ResponseWriter, r *http.Request) {
 		ws.reply(w, r, map[string]any{"span": span, "edges": edges, "resource_stats": stats})
 	case "/api/view":
 		ws.view(w, r, s, id)
+	case "/api/scheduling":
+		ws.scheduling(w, r, s, id)
 	case "/api/timeline":
 		ws.timeline(w, r, s, id)
 	case "/api/find":

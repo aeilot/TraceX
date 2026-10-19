@@ -12,6 +12,8 @@ test-web:
 	node --check web/timeline.js
 	node --check web/insight-model.js
 	node --check web/insights.js
+	node --check web/scheduling-model.js
+	node --check web/scheduling.js
 	node --check web/motion.js
 	node --check web/workspace.js
 	node --check web/workspace-model.js

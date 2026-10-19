@@ -1,0 +1,30 @@
+/* Scheduling workspace. */
+.scheduling-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.scheduling-tools label { display: flex; gap: 6px; align-items: center; font-size: 12px; color: #5f6b5b; }
+.scheduling-body { overflow-x: auto; }
+.scheduling-status { font-size: 12px; color: #5f6b5b; margin: 4px 0 8px; }
+.scheduling-heading { font-size: 13px; margin: 18px 0 6px; }
+.scheduling-heading small { font-weight: 400; color: #8e9d87; margin-left: 6px; }
+.scheduling-chart, .scheduling-lanes { display: block; user-select: none; cursor: crosshair; }
+.scheduling-grid { stroke: #edf0eb; }
+.scheduling-tick { font: 10px ui-monospace, monospace; fill: #7c8c75; }
+.scheduling-brush { fill: #e03a1e14; stroke: #e03a1e; }
+.scheduling-legend { display: flex; flex-wrap: wrap; gap: 12px; margin: 0 0 4px 190px; font-size: 11px; color: #5f6b5b; }
+.scheduling-legend-item { display: inline-flex; gap: 5px; align-items: center; }
+.scheduling-legend-item i { width: 10px; height: 3px; border-radius: 2px; display: inline-block; }
+.scheduling-lane .lane-background { fill: transparent; }
+.scheduling-lane.selected .lane-background { fill: #fff4d6; }
+.scheduling-lane.dimmed rect:not(.lane-background) { opacity: 0.55; }
+.scheduling-lane .lane-label { cursor: pointer; }
+.scheduling-lane-name { font: 11px ui-monospace, monospace; fill: #162f31; }
+.scheduling-lane rect.unknown-phase { stroke: #c9c3b3; stroke-dasharray: 2 2; }
+.scheduling-lane rect[fill] { cursor: pointer; }
+.scheduling-note { font-size: 12px; color: #8e9d87; }
+.scheduling-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.scheduling-table th, .scheduling-table td { padding: 5px 8px; border-bottom: 1px solid #edf0eb; text-align: right; white-space: nowrap; }
+.scheduling-table th:first-child, .scheduling-table td:first-child { text-align: left; }
+.scheduling-table tr.selected td { background: #fff4d6; }
+.scheduling-table td:first-child { display: flex; gap: 6px; align-items: center; }
+.scheduling-evidence { display: flex; gap: 4px; justify-content: flex-end; }
+.link-button { background: none; border: 0; padding: 0; color: #147b73; font: inherit; cursor: pointer; text-decoration: underline; }
+.scheduling-notes { font-size: 12px; color: #8e9d87; margin-top: 14px; }
