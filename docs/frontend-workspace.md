@@ -64,3 +64,33 @@ Verification: `make check` passed with 42 JavaScript tests, including panel clos
 Insights adds evidence-linked diagnostic cards, full-run model/tool aggregates, task-paired comparison, scoped optional model interpretation and a persistent browser notebook. See [definitions and configuration](insights.md). The compact header keeps the brand and navigation in one row, with internal navigation scrolling on narrow screens.
 
 The browser integration check used a clearly labeled local synthetic model fixture, with no real model calls. It verified explicit consent, structured output and evidence references, saving and reloading interpretation notes, editing, removal with Undo, and returning to the selected span. The default preview leaves interpretation disabled until the server is configured.
+
+## Profiler gesture and loading update
+
+The timeline now has explicit pan/region modes, a position slider, previous/next windows, Fit task, keyboard navigation and boundary feedback. Dragging and region selection do not select text. Horizontal gestures are contained at the ends. Panning and zooming change the visible window; the analysis-range fields and Apply remain explicit evidence filters.
+
+Movement uses frame-coalesced previews with neighboring buffers, cancellation of obsolete requests and bounded redraws. Failed loads retain the prior evidence and offer Retry. Long span labels remain visible, task occurrences with long common hashes use distinct suffixes, and repeated source capabilities no longer displace the task list. Narrow timelines fit their container and reduce timestamp density.
+
+See the [interaction review and screenshots](frontend-audit/interaction-review.md) for the checked flow, verification and limits. `make check` passed with 58 JavaScript tests plus Go, race, vet and build checks.
+
+## DAG structure view
+
+DAG defaults to a compact structure overview of the current page. Branches expand eight successors at a time; Expand page reveals the connected page structure, and the separate nodes-without-page-links checkbox restores those other page nodes. Counts distinguish displayed nodes, folded/outside nodes and relationships crossing the page. Search and selection automatically reveal ancestor paths. Neighborhood mode shows only the selected node and its direct recorded neighbors, with a return action.
+
+The canvas supports background dragging, pointer-centered modifier-wheel zoom, zoom buttons, original size and fit. Hover/focus emphasizes adjacent edges. The inspector offers a neighborhood action near its title, and a search refresh keeps the dismissed inspector closed. See the [DAG follow-up and before/after evidence](frontend-audit/interaction-review.md#dag-follow-up-structure-expansion-and-navigation).
+
+## Resource window zoom
+
+Resource charts have an independent shared visible window. Drag across any chart to zoom all five signals; repeated selections support nested investigation with Previous resource window and Reset resource zoom. Modifier-wheel zoom anchors at the pointer; horizontal scrolling or arrow keys pans, and +/− zooms. Use timeline window explicitly copies the timeline view. These actions do not change the DAG page, analysis filters or timeline window. Changing a resource runtime preserves the resource window; changing task/run/analysis bounds resets it. This local zoom history is not encoded in the shared view URL.
+
+Each window requests fresh evidence through the existing `/api/view` route with a one-span payload and up to 1,000 resource points. Imported profiles filter their complete local resource array instead. The server's existing envelope/error rules and returned/total sample counts remain visible. Peaks and memory-limit percentages use the displayed window, and all five charts share its axis. No samples and missing metrics remain distinct from measured zeros. Network rates separate task/component/runtime series and reject a reset in either counter direction. Rates and throttling shares require consecutive observed samples; a window containing only one sample cannot supply an interval rate. Downsampled counter rates describe the returned sample intervals.
+
+Requests coalesce for 70 ms and cancel obsolete windows. Preview samples remain visible while detail loads; failure exposes Retry. Returning to a cached window cancels any stale in-flight detail request. Live refresh preserves the current resource window within unchanged task/run/analysis bounds.
+
+Verification: the complete check passed with 71 JavaScript tests, Go tests, race detector, vet and build. Native browser dragging narrowed 4m 30.2s–13m 30.7s to 6m 19.1s–9m 26.3s, with matching CPU/memory axes and no text selection. Back, Reset, timeline alignment and runtime switching were checked; 390 px viewport retained a 390 px document. Browser warnings/errors were empty. [Resource window screenshot](frontend-audit/20-resource-window.png).
+
+## Timeline drag mode
+
+Timeline dragging is now fixed to region zoom. The Pan / Zoom to region switch has been removed; a static label and crosshair indicate the behavior. No Shift modifier is required. Explicit time navigation, wheel navigation and zoom/reset controls remain available. Resource-chart region selection and DAG background dragging retain their own behavior.
+
+Verification: direct native dragging narrowed the timeline from 4m 30.2s–13m 30.7s to 6m 5.6s–8m 24.4s without selecting text; no mode-switch controls remain. All 71 JavaScript tests and the embedded binary build passed.

@@ -57,14 +57,14 @@ const state = {
   critical: false,
   stream: null,
   watchInterval: 0,
-  runtimeIDs: [],
+  runtimes: [],
   resourceError: "",
   resourceReturned: 0,
   resourceTotal: 0,
   request: 0,
   timeline: null,
-  timelineKey: "",
-  timelineRequest: 0,
+  timelineDrawn: null,
+  timelineCache: [],
 };
 let toastTimer, searchTimer;
 function notify(message) {
@@ -98,7 +98,7 @@ function format(ms) {
   if (ms < 1000) return `${Math.round(ms)} ms`;
   if (ms < 60000) return `${(ms / 1000).toFixed(ms < 10000 ? 2 : 1)} s`;
   if (ms < 3600000)
-    return `${Math.floor(ms / 60000)}m ${((ms % 60000) / 1000).toFixed(1)}s`;
+    return `${Math.floor(Math.round(ms / 100) / 600)}m ${((Math.round(ms / 100) % 600) / 10).toFixed(1)}s`;
   return `${Math.floor(ms / 3600000)}h ${Math.floor((ms % 3600000) / 60000)}m`;
 }
 function rate(perSecond) {
@@ -202,8 +202,8 @@ function bounds() {
     duration: Math.max(0.001, end - state.rangeStart),
   };
 }
-async function json(url) {
-  const response = await fetch(url);
+async function json(url, options) {
+  const response = await fetch(url, options);
   if (!response.ok) {
     let msg = `HTTP ${response.status}`;
     try {
@@ -358,8 +358,8 @@ async function loadView() {
     }
     if (request !== state.request) return;
     state.profile = data.profile;
-    state.runtimeIDs = data.runtime_ids || [
-      ...new Set(data.profile.resources.map((r) => r.runtime_id)),
+    state.runtimes = data.runtimes || [
+      ...new Map(data.profile.resources.map((r) => [r.runtime_id || r.component, { id: r.runtime_id, component: r.component, task_id: r.task_id }])).values(),
     ];
     state.resourceError = data.resource_error || "";
     state.resourceReturned = data.profile.resources.length;
@@ -378,7 +378,7 @@ async function loadView() {
     $("#notice").hidden = true;
     render();
     setLiveStatus();
-    if (state.selected) selectSpan(state.selected);
+    if (state.selected&&!inspectorSuppressed) selectSpan(state.selected);
     if (searchTarget) requestAnimationFrame(() => centerSpan(searchTarget));
   } catch (e) {
     if (request === state.request) { showError(e); if (state.query) $("#span-search-status").textContent = t9n("Search unavailable"); }
@@ -493,7 +493,7 @@ function render() {
     b.setAttribute("aria-pressed", String(state.task === t.id));
     b.append(
       html("span", `status-dot ${failedTask(t) ? "failed" : ""}`),
-      html("span", "task-name", (flags ? "⚠ " : "") + (t.name || t.id)),
+      html("span", "task-name", (flags ? "⚠ " : "") + ((!t.name||t.name===t.id)&&/^[a-f0-9]{32,}-[0-9]+$/.test(t.id)?t9n("Task {number}",{number:t.id.split("-").at(-1)}):(t.name||t.id))),
     );
     if (Number.isFinite(t.score)) {
       const sc = html("span", "task-score", score(t.score));
@@ -511,29 +511,25 @@ function render() {
   select.value = state.kind;
   const caps = $("#capability-list");
   caps.replaceChildren();
-  for (const c of p.capabilities
-    .filter((c) => !c.name.startsWith("monitor/"))
-    .slice(0, 4)) {
-    const item = html(
-      "div",
-      `capability ${["unsupported", "not_enabled", "failed", "unavailable"].includes(c.status) ? "unavailable" : ""}`,
-    );
-    item.append(html("span", "status-dot"), html("span", "", c.name));
-    item.title = `${t9n(c.status)}${c.reason ? ": " + t9n(c.reason) : ""}`;
-    caps.append(item);
+  const sourceGroups=new Map();
+  for(const c of p.capabilities.filter(c=>!c.name.startsWith("monitor/"))){
+    const key=c.name.split("/")[0];if(!sourceGroups.has(key))sourceGroups.set(key,[]);sourceGroups.get(key).push(c);
   }
+  for(const [name,records] of [...sourceGroups].slice(0,4)){
+    const failed=records.some(c=>["unsupported","not_enabled","failed","unavailable"].includes(c.status));
+    const item=html("div",`capability ${failed?"unavailable":""}`);
+    item.append(html("span","status-dot"),html("span","",`${name}${records.length>1?" ×"+records.length:""}`));
+    item.title=records.slice(0,4).map(c=>`${c.name}: ${t9n(c.status)}`).join("\n");caps.append(item);
+  }
+  // Options describe only the current run and task scope, labeled by role and
+  // owning task; options from previously viewed runs are not carried over.
   const runtime = $("#resource-filter"),
-    oldOptions = [...runtime.options].filter((o) => o.value !== "all");
-  const names = new Map(oldOptions.map((o) => [o.value, o.text]));
-  for (const id of state.runtimeIDs)
-    if (!names.has(id)) names.set(id, short(id, 30));
-  for (const r of p.resources)
-    names.set(
-      r.runtime_id || r.component,
-      r.component + (r.runtime_id ? " · " + short(r.runtime_id, 16) : ""),
-    );
+    roles = ["sandbox", "harness", "bridge"],
+    rank = (r) => [r.task_id ? 0 : 1, r.task_id || "", roles.indexOf(r.component) < 0 ? roles.length : roles.indexOf(r.component), r.id || ""],
+    order = (a, b) => { const x = rank(a), y = rank(b); for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1; return 0; };
   runtime.replaceChildren(new Option(t9n("All runtimes"), "all"));
-  for (const [k, v] of names) runtime.add(new Option(v, k));
+  for (const r of [...state.runtimes].sort(order)) runtime.add(new Option(runtimeLabel(r), r.id || r.component));
+  if (![...runtime.options].some((o) => o.value === state.runtime)) state.runtime = "all";
   runtime.value = state.runtime;
   $("#resource-message").hidden = !state.resourceError;
   $("#resource-message").textContent = t9n(state.resourceError);
@@ -1146,7 +1142,8 @@ function renderViews() {
     b.classList.toggle("selected", b.dataset.view === state.view);
     b.setAttribute("aria-pressed", String(b.dataset.view === state.view));
   }
-  drawDAG(spans);
+  if(state.view!=="timeline")drawDAG(spans);
+  timelineDirty=true;
   loadTimeline();
   drawResources();
   if (renderedView !== null && renderedView !== state.view) {
@@ -1156,66 +1153,36 @@ function renderViews() {
   renderedView = state.view;
   renderSpanSearch();
 }
+let dagExpanded=new Set(),dagCollapsed=new Set(),dagLimits=new Map(),dagAll=false,dagUnlinked=false,dagFocus=null,dagContext="",dagScale=1,dagSize=null;
+function runtimeLabel(r){
+  const owner=!r.task_id?t9n("Shared infrastructure"):/^[a-f0-9]{32,}-[0-9]+$/.test(r.task_id)?t9n("Task {number}",{number:r.task_id.split("-").at(-1)}):short(r.task_id,24);
+  return `${r.component||t9n("Runtime")} · ${owner}${r.id?" · "+short(r.id,12):""}`;
+}
+function dagActor(s){
+  if(s.agent_id)return s.agent_id;
+  const task=state.profile.tasks.find(t=>t.id===s.task_id);
+  return task?.name&&task.name!==task.id?task.name:/^[a-f0-9]{32,}-[0-9]+$/.test(s.task_id||"")?t9n("Task {number}",{number:s.task_id.split("-").at(-1)}):s.task_id||t9n("Run scope");
+}
 function drawDAG(spans) {
-  const svg = $("#dag");
+  const svg=$("#dag"),context=[state.runKey,state.revision,state.task,state.kind,state.rangeStart,state.rangeEnd,state.pageOffset].join("|");
+  if(context!==dagContext){dagExpanded.clear();dagCollapsed.clear();dagLimits.clear();dagAll=false;dagFocus=null;dagContext=context;dagScale=1;}
+  const reveal=spans.filter(s=>state.query&&TraceXWorkspace.matches(s,state.query)).map(s=>s.id);
+  if(state.selected)reveal.push(state.selected);
+  const graph=TraceXDAG.project(spans,edges(),{expanded:dagExpanded,collapsed:dagCollapsed,limits:dagLimits,all:dagAll,unlinked:dagUnlinked,focus:dagFocus,reveal});
+  const displayed=graph.nodes,es=graph.edges,ids=new Set(displayed.map(s=>s.id));
   svg.replaceChildren();
-  $("#dag-empty").hidden = spans.length !== 0;
-  if (!spans.length) {
-    svg.setAttribute("width", "100%");
-    svg.setAttribute("height", "0");
-    return;
-  }
-  const displayed = spans,
-    ids = new Set(displayed.map((s) => s.id));
-  const es = edges().filter((e) => ids.has(e.source) && ids.has(e.target));
-  $("#dag-note").textContent =
-    state.hiddenEdges > 0
-      ? t9n("{visible} visible edges · {hidden} cross this page", { visible: es.length, hidden: state.hiddenEdges })
-      : es.length
-        ? t9n(es.length === 1 ? "{count} recorded relationship" : "{count} recorded relationships", { count: es.length })
-        : t9n("No recorded dependencies · isolated spans");
-  const parents = new Map(),
-    adj = new Map(),
-    indeg = new Map();
-  for (const s of displayed) {
-    parents.set(s.id, []);
-    adj.set(s.id, []);
-    indeg.set(s.id, 0);
-  }
-  for (const e of es) {
-    parents.get(e.target).push(e.source);
-    adj.get(e.source).push(e.target);
-    indeg.set(e.target, indeg.get(e.target) + 1);
-  }
-  const depth = new Map(),
-    q = displayed.filter((s) => !indeg.get(s.id)).map((s) => s.id);
-  for (const id of q) depth.set(id, 0);
-  for (let i = 0; i < q.length; i++) {
-    for (const id of adj.get(q[i])) {
-      depth.set(id, Math.max(depth.get(id) || 0, (depth.get(q[i]) || 0) + 1));
-      indeg.set(id, indeg.get(id) - 1);
-      if (!indeg.get(id)) q.push(id);
-    }
-  }
-  const columns = new Map();
-  for (const s of displayed) {
-    const d = depth.get(s.id) || 0;
-    if (!columns.has(d)) columns.set(d, []);
-    columns.get(d).push(s);
-  }
-  const pos = new Map();
-  let maxRows = 0;
-  for (const [d, col] of columns) {
-    col.sort((a, b) => a.start_ms - b.start_ms);
-    maxRows = Math.max(maxRows, col.length);
-    for (let i = 0; i < col.length; i++)
-      pos.set(col[i].id, { x: 28 + d * 225, y: 39 + i * 94 });
-  }
-  const width = Math.max($("#dag-scroll").clientWidth, columns.size * 225 + 36),
-    height = Math.max(280, maxRows * 94 + 55);
-  svg.setAttribute("width", width);
-  svg.setAttribute("height", height);
-  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  $("#dag-empty").hidden=displayed.length!==0;
+  $("#dag-count").textContent=`${displayed.length} / ${spans.length}`;
+  $("#dag-note").textContent=t9n(dagFocus?"{shown} in neighborhood · {folded} outside · {cross} relationships cross this page":"{shown} shown · {folded} folded or unlinked · {cross} relationships cross this page",{shown:displayed.length,folded:graph.hidden,cross:state.hiddenEdges||0});
+  $("#dag-unlinked-count").textContent=graph.isolated;
+  $("#dag-unlinked").checked=dagUnlinked||graph.autoUnlinked;
+  $("#dag-unlinked").disabled=graph.autoUnlinked;
+  $("#dag-focus").disabled=!state.selected||!spans.some(s=>s.id===state.selected);
+  $("#dag-context").hidden=!dagFocus;
+  $("#dag-collapse-all").disabled=!dagAll&&!dagExpanded.size&&!dagCollapsed.size&&!dagFocus;
+  if(!displayed.length){svg.setAttribute("width","100%");svg.setAttribute("height","0");return;}
+  const {pos,columns,width,height}=TraceXDAG.layout(graph);
+  dagSize={width,height};svg.setAttribute("viewBox",`0 0 ${width} ${height}`);applyDAGScale();
   const defs = node("defs"),
     marker = node("marker", {
       id: "arrow",
@@ -1233,8 +1200,8 @@ function drawDAG(spans) {
     svg.append(
       node(
         "text",
-        { x: 28 + d * 225, y: 20, class: "graph-depth" },
-        d === 0 ? t9n("ROOT / UNLINKED") : t9n("DEPTH {depth}", { depth: d }),
+        { x: 28 + d * 260, y: 20, class: "graph-depth" },
+        d === 0 ? t9n("PAGE ROOTS") : t9n("DEPTH {depth}", { depth: d }),
       ),
     );
   for (const e of es) {
@@ -1245,8 +1212,9 @@ function drawDAG(spans) {
       tx = b.x,
       ty = b.y + 34;
     const edgePath = node("path", {
-      d: `M${sx},${sy} C${sx + 20},${sy} ${tx - 20},${ty} ${tx - 6},${ty}`,
+      d: `M${sx},${sy} C${sx + 45},${sy} ${tx - 45},${ty} ${tx - 6},${ty}`,
       class: `dag-edge edge-${e.kind} ${state.selected === e.source || state.selected === e.target ? "focused" : ""} ${state.critical && state.analysis.critical_path.span_ids.includes(e.source) && state.analysis.critical_path.span_ids.includes(e.target) ? "critical" : ""}`,
+      "data-source":e.source,"data-target":e.target,
       "marker-end": "url(#arrow)",
     });
     edgePath.append(node("title", {}, `${e.kind}: ${e.source} → ${e.target}`));
@@ -1260,7 +1228,7 @@ function drawDAG(spans) {
       transform: `translate(${x},${y})`,
       tabindex: 0,
       role: "button",
-      "aria-label": `${s.agent_id || t9n("Agent")}: ${s.name}, ${spanDuration(s)}`,
+      "aria-label": `${dagActor(s)}: ${s.name}, ${spanDuration(s)}`,
     });
     g.append(
       node("rect", { width: 190, height: 70, rx: 7 }),
@@ -1275,7 +1243,7 @@ function drawDAG(spans) {
       node(
         "text",
         { x: 13, y: 17, class: "node-agent" },
-        short(s.agent_id || s.task_id || t9n("Unassigned"), 26),
+        short(dagActor(s), 26),
       ),
       node("text", { x: 13, y: 35, class: "node-title" }, short(s.name, 28)),
       node(
@@ -1294,6 +1262,9 @@ function drawDAG(spans) {
         `${s.name}\n${s.agent_id || s.task_id || ""}\n${spanDuration(s)} · ${s.status || "unknown"}`,
       ),
     );
+    g.onpointerenter=()=>highlightDAG(s.id);
+    g.onpointerleave=()=>highlightDAG(null);
+    g.onfocus=()=>highlightDAG(s.id);g.onblur=()=>highlightDAG(null);
     g.onclick = () => selectSpan(s.id);
     g.onkeydown = (e) => {
       if (e.key === "Enter" || e.key === " ") {
@@ -1302,7 +1273,44 @@ function drawDAG(spans) {
       }
     };
     svg.append(g);
+    const successors=graph.children.get(s.id)||[];
+    if(successors.length&&!dagFocus){
+      const hidden=graph.folded.get(s.id)||0,opened=!dagCollapsed.has(s.id)&&(dagAll||(graph.depth.get(s.id)||0)===0||dagExpanded.has(s.id)),next=Math.min(8,hidden);
+      const collapse=()=>{
+        if(dagAll){dagExpanded=new Set(spans.map(s=>s.id));dagLimits=new Map(spans.map(s=>[s.id,Infinity]));dagAll=false;}
+        dagExpanded.delete(s.id);dagCollapsed.add(s.id);dagLimits.delete(s.id);
+      };
+      const redraw=()=>{drawDAG(visible());[...$("#dag").querySelectorAll(".dag-fold")].find(e=>e.dataset.foldId===s.id)?.focus({preventScroll:true});};
+      const control=node("g",{transform:`translate(${x+8},${y+74})`,class:"dag-fold","data-fold-id":s.id,role:"button",tabindex:0,"aria-label":t9n(hidden?"Show next {count} successors":"Fold successors",{count:next}),"aria-expanded":String(opened)});
+      control.append(node("rect",{width:hidden&&opened?132:174,height:22,rx:3}),node("text",{x:8,y:15},hidden?t9n("+ {next} of {remaining} successors",{next,remaining:hidden}):t9n("− Fold branch")));
+      const toggle=()=>{
+        if(hidden){if(opened)dagLimits.set(s.id,(dagLimits.get(s.id)??8)+8);else{dagCollapsed.delete(s.id);dagExpanded.add(s.id);}}
+        else collapse();redraw();
+      };
+      control.onclick=toggle;control.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();toggle();}};svg.append(control);
+      if(hidden&&opened){
+        const fold=node("g",{transform:`translate(${x+147},${y+74})`,class:"dag-fold",role:"button",tabindex:0,"aria-label":t9n("Fold successors")});
+        fold.append(node("rect",{width:35,height:22,rx:3}),node("text",{x:12,y:15},"−"));
+        const foldAction=()=>{collapse();redraw();};fold.onclick=foldAction;fold.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();foldAction();}};svg.append(fold);
+      }
+    }
   }
+}
+function highlightDAG(id){
+  const svg=$("#dag");svg.classList.toggle("has-hover",!!id);
+  for(const edge of svg.querySelectorAll(".dag-edge"))edge.classList.toggle("adjacent",!!id&&(edge.dataset.source===id||edge.dataset.target===id));
+}
+function applyDAGScale(){
+  if(!dagSize)return;
+  $("#dag").setAttribute("width",dagSize.width*dagScale);$("#dag").setAttribute("height",dagSize.height*dagScale);
+  $("#dag-zoom-value").textContent=`${Math.round(dagScale*100)}%`;
+}
+function zoomDAG(factor,anchor){
+  if(!dagSize)return;const viewport=$("#dag-scroll"),old=dagScale;
+  dagScale=Math.max(.2,Math.min(2,dagScale*factor));
+  const x=anchor?.x??viewport.clientWidth/2,y=anchor?.y??viewport.clientHeight/2;
+  const left=(viewport.scrollLeft+x)/old,top=(viewport.scrollTop+y)/old;applyDAGScale();
+  viewport.scrollLeft=left*dagScale-x;viewport.scrollTop=top*dagScale-y;
 }
 // The timeline shows every span in the analysis window, not the DAG's page.
 // Zooming narrows a view window inside it instead of stretching the plot, so
@@ -1311,8 +1319,8 @@ function drawDAG(spans) {
 // spans for the visible window and plot width.
 const MIN_VIEW_MS = 1;
 function timelineGeometry() {
-  const labelWidth = 180;
-  return { labelWidth, plotWidth: Math.max(300, $("#timeline-scroll").clientWidth - labelWidth - 25) };
+  const width=$("#timeline-scroll").clientWidth,labelWidth=width<600?Math.max(80,Math.round(width*.25)):180;
+  return {labelWidth,plotWidth:Math.max(100,width-labelWidth-25)};
 }
 function viewBounds() {
   const b = bounds(),
@@ -1320,88 +1328,167 @@ function viewBounds() {
     end = Math.min(Math.max(state.viewEnd ?? b.end, start + MIN_VIEW_MS), b.end);
   return { start, end, duration: Math.max(0.001, end - start) };
 }
+let timelineFrame=null, timelineGesture=false, timelineDirty=false;
 function setView(start, end) {
-  const b = bounds(),
-    duration = Math.min(Math.max(end - start, MIN_VIEW_MS), b.duration);
-  start = Math.min(Math.max(start, b.start), b.end - duration);
-  const full = start <= b.start && start + duration >= b.end,
-    micro = (t) => Math.round(t * 1000) / 1000;
-  state.viewStart = full ? null : micro(start);
-  state.viewEnd = full ? null : micro(start + duration);
-  showZoom();
-  previewTimeline();
-  loadTimeline();
-  window.dispatchEvent(new CustomEvent("tracex:view"));
+  const b=bounds(),duration=Math.min(Math.max(end-start,MIN_VIEW_MS),b.duration);
+  start=Math.min(Math.max(start,b.start),b.end-duration);
+  const full=start<=b.start&&start+duration>=b.end;
+  const nextStart=full?null:Math.round(start*1000)/1000,nextEnd=full?null:Math.round((start+duration)*1000)/1000;
+  if(state.viewStart===nextStart&&state.viewEnd===nextEnd)return;
+  state.viewStart=nextStart;state.viewEnd=nextEnd;
+  if(timelineFrame===null)timelineFrame=requestAnimationFrame(()=>{
+    timelineFrame=null;showZoom();previewTimeline();updateTimelineNavigation();loadTimeline();
+  });
+  clearTimeout(timelineURLTimer);
+  timelineURLTimer=setTimeout(()=>window.dispatchEvent(new CustomEvent("tracex:view")),180);
 }
-// Map the drawn timeline onto the current view at once while the new layout
-// loads: scale and shift the plot content horizontally.
+let timelineURLTimer;
+function updateTimelineNavigation() {
+  const b=bounds(),v=viewBounds(),full=v.duration>=b.duration-.001;
+  const position=$("#timeline-position");position.disabled=full;
+  position.value=full?0:(v.start-b.start)/(b.duration-v.duration)*1000;
+  position.setAttribute("aria-valuetext",`${format(v.start)} → ${format(v.end)}`);
+  $("#timeline-back").disabled=full||v.start<=b.start+.001;
+  $("#timeline-forward").disabled=full||v.end>=b.end-.001;
+  $("#reset-time").disabled=full;
+  $("#timeline-zoom-out").disabled=full;
+  $("#timeline-zoom-in").disabled=v.duration<=MIN_VIEW_MS;
+  $("#timeline-fit-task").disabled=state.task==="all"||!state.profile.tasks.some(t=>t.id===state.task&&t.duration_ms>0);
+  $("#timeline-boundary").textContent=full?t9n("Full window"):v.start<=b.start+.001?t9n("Start of window"):v.end>=b.end-.001?t9n("End of window"):"";
+  $("#time-window").textContent=t9n("Visible: {start} → {end}",{start:format(v.start),end:format(v.end)});
+}
+// Map the drawn timeline onto the current view at once: scale and shift the
+// plot content horizontally. The drawing covers a buffer around the view it
+// was drawn for, so small pans reveal real bars instead of blank space.
 function previewTimeline() {
   const content = $("#timeline .timeline-content"),
-    drawn = state.timeline?.view;
+    drawn = state.timelineDrawn;
   if (!content || !drawn) return;
   const { labelWidth, plotWidth } = timelineGeometry(),
     view = viewBounds(),
     k = (drawn[1] - drawn[0]) / view.duration,
     offset = ((drawn[0] - view.start) * plotWidth) / view.duration;
   content.setAttribute("transform", `translate(${labelWidth + offset},0) scale(${k},1) translate(${-labelWidth},0)`);
+  $("#timeline").querySelectorAll(".timeline-tick").forEach(tick=>{const fraction=Number(tick.dataset.fraction);tick.textContent=fraction===0||view.duration>=10000?format(view.start+view.duration*fraction):"+"+format(view.duration*fraction);});
 }
-let timelineTimer;
+// Timeline layouts are fetched for a buffer two views wide on each side of the
+// view, at the view's resolution, and kept in a small cache. A view inside a
+// buffer whose resolution is within ZOOM_SLACK of its own is drawn from it
+// with no request; nearing a buffer edge prefetches the next buffer while the
+// gesture continues. Obsolete requests are canceled; buffered results replace
+// SVG children without replacing gesture handlers or pointer capture.
+const BUFFER_VIEWS = 2,
+  PREFETCH_EDGE = 1,
+  ZOOM_SLACK = 1.5,
+  TIMELINE_CACHE = 8;
+let timelineTimer=null;
+function timelineFilterKey(plotWidth) {
+  return [state.runKey, state.revision, state.task, state.kind, Math.round(plotWidth)].join("|");
+}
+// fits reports whether a cached layout can draw view: it covers the view and
+// its pixels per millisecond are close to the view's.
+function timelineFits(entry, key, view, plotWidth) {
+  if (!entry || entry.key !== key) return false;
+  const ratio = plotWidth / view.duration / entry.px;
+  return entry.buffer[0] <= view.start && view.end <= entry.buffer[1] && ratio <= ZOOM_SLACK && ratio >= 1 / ZOOM_SLACK;
+}
+function timelineNearEdge(entry, view) {
+  const b = bounds(),
+    margin = view.duration * PREFETCH_EDGE;
+  return (
+    (entry.buffer[0] > b.start && view.start - entry.buffer[0] < margin) ||
+    (entry.buffer[1] < b.end && entry.buffer[1] - view.end < margin)
+  );
+}
+function scheduleTimelineDraw() {
+  timelineDirty=true;if(timelineTimer!==null)return;
+  timelineTimer=setTimeout(()=>{
+    timelineTimer=null;
+    if(timelineGesture==="select"){scheduleTimelineDraw();return;}
+    const {plotWidth}=timelineGeometry(),v=viewBounds(),key=timelineFilterKey(plotWidth);
+    const fit=state.timelineCache.find(e=>timelineFits(e,key,v,plotWidth));
+    if(fit){state.timeline=fit;timelineDirty=false;drawTimeline();}
+    loadTimeline();
+  },80);
+}
+const timelineLoader=TraceXTimeline.createLoader({
+  fetch: (spec,signal)=>fetchTimeline(spec,signal),
+  result:entry=>{
+    const {plotWidth}=timelineGeometry();
+    if(entry.key!==timelineFilterKey(plotWidth))return;
+    state.timelineCache=[entry,...state.timelineCache.filter(e=>e.key!==entry.key||e.buffer.join()!==entry.buffer.join())].slice(0,TIMELINE_CACHE);
+    timelineFailedKey="";$("#timeline-retry").hidden=true;
+    scheduleTimelineDraw();
+  },
+  error:()=>{
+    timelineFailedKey=timelineFilterKey(timelineGeometry().plotWidth);
+    $("#timeline-load-status").textContent=t9n("Could not load this area. Previous view retained.");
+    $("#timeline-retry").hidden=false;
+  },
+  busy:on=>{
+    $("#timeline-scroll").setAttribute("aria-busy",String(on));
+    if(!timelineFailedKey)$("#timeline-load-status").textContent=on?t9n("Loading nearby spans…"):"";
+  },
+});
+let timelineFailedKey="";
 function loadTimeline() {
-  if (!state.profile || $("#timeline-panel").hidden) return;
-  const { plotWidth } = timelineGeometry(),
-    view = viewBounds(),
-    key = [state.runKey, state.revision, state.task, state.kind, view.start, view.end, Math.round(plotWidth)].join("|");
-  // Redraw only a layout that matches the view; while the view moves, the
-  // previous drawing is transformed instead, and the new layout is fetched
-  // once the gesture pauses.
-  if (state.timeline && state.timelineKey === key) return drawTimeline();
-  previewTimeline();
-  clearTimeout(timelineTimer);
-  timelineTimer = setTimeout(() => fetchTimeline(key, view, plotWidth), state.timeline ? 80 : 0);
-}
-async function fetchTimeline(key, view, plotWidth) {
-  const request = ++state.timelineRequest;
-  try {
-    const local = state.imports.get(state.runKey);
-    let layout;
-    if (local) {
-      const spans = local.spans
-        .filter(
-          (s) =>
-            (state.task === "all" || s.task_id === state.task) &&
-            (state.kind === "all" || s.kind === state.kind) &&
-            s.start_ms <= view.end &&
-            s.start_ms + s.duration_ms >= view.start,
-        )
-        .sort((x, y) => x.start_ms - y.start_ms);
-      layout = timelineLayout(spans, view.start, view.end, plotWidth);
-    } else {
-      const params = new URLSearchParams({ run: state.runKey, start_ms: view.start, end_ms: view.end, width: Math.round(plotWidth) });
-      if (state.task !== "all") params.set("task", state.task);
-      if (state.kind !== "all") params.set("kind", state.kind);
-      layout = (await json("/api/timeline?" + params)).layout;
-    }
-    if (request !== state.timelineRequest) return;
-    state.timeline = { layout, view: [view.start, view.end] };
-    state.timelineKey = key;
-    drawTimeline();
-  } catch (e) {
-    if (request === state.timelineRequest) showError(e);
+  if(!state.profile||$("#timeline-panel").hidden)return;
+  const {plotWidth}=timelineGeometry(),view=viewBounds(),key=timelineFilterKey(plotWidth);
+  previewTimeline();updateTimelineNavigation();
+  const fit=state.timelineCache.find(e=>timelineFits(e,key,view,plotWidth));
+  // Never present another run/filter's bars as the current evidence.
+  if(state.timeline&&state.timeline.key!==key){
+    timelineLoader.cancel();state.timeline=null;state.timelineDrawn=null;
+    if(!timelineGesture)drawTimeline();
+  }
+  if(fit&&(state.timeline!==fit||state.timelineDrawn?.[0]!==view.start||state.timelineDrawn?.[1]!==view.end||timelineDirty))scheduleTimelineDraw();
+  if((!fit||timelineNearEdge(fit,view))&&timelineFailedKey!==key){
+    const b=bounds(),pad=view.duration*BUFFER_VIEWS,
+      buffer=[Math.max(b.start,view.start-pad),Math.min(b.end,view.end+pad)],px=plotWidth/view.duration;
+    timelineLoader.request({key,buffer,px,view,run:state.runKey,task:state.task,kind:state.kind,local:state.imports.get(state.runKey),id:[key,...buffer,px].join("|")});
   }
 }
+async function fetchTimeline({key,buffer,px,run,task,kind,local},signal) {
+  const [start, end] = buffer,
+    width = Math.max(1, Math.round((end - start) * px));
+  let layout;
+  if (local) {
+    const spans = local.spans
+      .filter(
+        (s) =>
+          (task === "all" || s.task_id === task) &&
+          (kind === "all" || s.kind === kind) &&
+          s.start_ms <= end &&
+          s.start_ms + s.duration_ms >= start,
+      )
+      .sort((x, y) => x.start_ms - y.start_ms);
+    layout = timelineLayout(spans, start, end, width);
+  } else {
+    const params = new URLSearchParams({ run, start_ms: start, end_ms: end, width });
+    if (task !== "all") params.set("task", task);
+    if (kind !== "all") params.set("kind", kind);
+    layout = (await json("/api/timeline?" + params,{signal})).layout;
+  }
+  return { key, buffer, px, layout };
+}
 function drawTimeline() {
-  const svg = $("#timeline");
+  const svg = $("#timeline"),focused=document.activeElement,restoreFocus=svg.contains(focused),focusedSpan=focused?.dataset?.spanId;
   svg.replaceChildren();
-  // Draw in the view this layout was computed for; previewTimeline maps it
-  // onto the current view if that has moved on since.
+  // Draw at the current view, including the layout's buffer beyond it;
+  // previewTimeline maps the drawing onto the view as it moves on.
   const { labelWidth, plotWidth } = timelineGeometry(),
-    drawn = state.timeline?.view || [viewBounds().start, viewBounds().end],
-    vb = { start: drawn[0], end: drawn[1], duration: Math.max(0.001, drawn[1] - drawn[0]) },
-    total = vb.duration;
+    vb = viewBounds(),
+    total = vb.duration,
+    buffer = state.timeline?.buffer || [vb.start, vb.end];
+  state.timelineDrawn = [vb.start, vb.end];
   const width = labelWidth + plotWidth + 25;
   const layout = state.timeline?.layout || { lanes: [], items: [], spans: 0 };
   showZoom();
-  $("#timeline-count").textContent = layout.spans.toLocaleString();
+  // Count spans in the view, not the buffer; a cluster counts in full.
+  let inView = 0;
+  for (const it of layout.items)
+    if (it.start_ms <= vb.end && it.start_ms + it.duration_ms >= vb.start) inView += it.span ? 1 : it.count;
+  $("#timeline-count").textContent = inView.toLocaleString();
   let y = 38;
   const lanes = layout.lanes.map((l) => {
     const lane = {
@@ -1425,12 +1512,13 @@ function drawTimeline() {
   const defs = node("defs", {});
   defs.append(clip);
   const plot = node("g", { "clip-path": "url(#timeline-clip)" }),
-    content = node("g", { class: "timeline-content" });
-  plot.append(content);
-  for (let i = 0; i <= 8; i++) {
-    const t = (total * i) / 8,
+    content = node("g", { class: "timeline-content" }),axis=node("g",{class:"timeline-axis"});
+  plot.append(axis,content);
+  const tickCount=Math.max(2,Math.min(8,Math.floor(plotWidth/100)));
+  for (let i = 0; i <= tickCount; i++) {
+    const t = (total * i) / tickCount,
       x = labelWidth + (plotWidth * t) / total;
-    content.append(
+    axis.append(
       node("line", {
         x1: x,
         x2: x,
@@ -1443,8 +1531,9 @@ function drawTimeline() {
         {
           x,
           y: 16,
-          "text-anchor": i === 0 ? "start" : "middle",
-          class: "timeline-label",
+          "text-anchor": i === 0 ? "start" : i===tickCount?"end":"middle",
+          "data-fraction":i/tickCount,
+          class: "timeline-label timeline-tick",
         },
         // A short view labels offsets from its start, which absolute
         // times at run scale cannot resolve.
@@ -1464,12 +1553,12 @@ function drawTimeline() {
       node(
         "text",
         { x: 18, y: lane.y + 9, class: "timeline-agent" },
-        short(lane.name, 22),
+        short(lane.name, Math.max(8,Math.floor((labelWidth-30)/6))),
       ),
       node(
         "text",
         { x: 18, y: lane.y + 23, class: "timeline-label" },
-        short(lane.task, 22),
+        short(lane.task, Math.max(8,Math.floor((labelWidth-30)/6))),
       ),
       node("line", {
         x1: 0,
@@ -1530,8 +1619,8 @@ function drawTimeline() {
         );
       continue;
     }
-    const clippedStart = Math.max(s.start_ms, vb.start),
-      clippedEnd = Math.min(s.start_ms + s.duration_ms, vb.end);
+    const clippedStart = Math.max(s.start_ms, buffer[0]),
+      clippedEnd = Math.min(s.start_ms + s.duration_ms, buffer[1]);
     const x =
         labelWidth + ((clippedStart - vb.start) / total) * plotWidth,
       w = Math.max(
@@ -1566,12 +1655,13 @@ function drawTimeline() {
       }
     };
     content.append(bar);
-    if (w > 52)
+    const labelX=Math.max(x,labelWidth),visibleWidth=Math.min(x+w,labelWidth+plotWidth)-labelX;
+    if (visibleWidth > 52)
       content.append(
         node(
           "text",
-          { x: x + 7, y: y + 13, class: "timeline-bar-label" },
-          short(s.name, Math.floor((w - 14) / 5.4)),
+          { x: labelX + 7, y: y + 13, class: "timeline-bar-label" },
+          short(s.name, Math.floor((visibleWidth - 14) / 5.4)),
         ),
       );
   }
@@ -1582,84 +1672,56 @@ function drawTimeline() {
       node(
         "text",
         { x: 30, y: 70, class: "timeline-label" },
-        t9n("No matching execution spans."),
+        t9n(state.timeline?"No matching execution spans.":"Loading nearby spans…"),
       ),
     );
-  svg.onpointerdown = (event) => {
-    if (event.target.closest(".timeline-bar")) return;
-    const rect = svg.getBoundingClientRect();
-    const px = event.clientX - rect.left;
-    if (px < labelWidth) return;
-    if (!event.shiftKey) {
-      // Drag to pan the view window.
-      const from = viewBounds();
-      svg.setPointerCapture(event.pointerId);
-      svg.classList.add("panning");
-      svg.onpointermove = (move) => {
-        const dt = ((event.clientX - move.clientX) / plotWidth) * from.duration;
-        setView(from.start + dt, from.end + dt);
-      };
-      svg.onpointerup = svg.onpointercancel = (up) => {
-        svg.classList.remove("panning");
-        svg.onpointermove = svg.onpointerup = svg.onpointercancel = null;
-        if (svg.hasPointerCapture(up.pointerId)) svg.releasePointerCapture(up.pointerId);
-      };
-      return;
-    }
-    const initial = Math.max(0, Math.min(plotWidth, px - labelWidth));
-    const overlay = node("rect", {
-      x: initial + labelWidth,
-      y: 27,
-      width: 1,
-      height: height - 27,
-      fill: "#e03a1e14",
-      stroke: "#e03a1e",
-      "pointer-events": "none",
-    });
-    svg.append(overlay);
-    svg.setPointerCapture(event.pointerId);
-    svg.onpointermove = (move) => {
-      const next = Math.max(
-        0,
-        Math.min(plotWidth, move.clientX - rect.left - labelWidth),
-      );
-      overlay.setAttribute("x", Math.min(initial, next) + labelWidth);
-      overlay.setAttribute("width", Math.abs(next - initial));
-    };
-    svg.onpointerup = (up) => {
-      const next = Math.max(
-        0,
-        Math.min(plotWidth, up.clientX - rect.left - labelWidth),
-      );
-      overlay.remove();
-      svg.onpointermove = null;
-      svg.onpointerup = null;
-      if (svg.hasPointerCapture(up.pointerId))
-        svg.releasePointerCapture(up.pointerId);
-      if (Math.abs(next - initial) > 8)
-        applyRange(
-          vb.start + (Math.min(initial, next) / plotWidth) * total,
-          vb.start + (Math.max(initial, next) / plotWidth) * total,
-        );
-    };
-    svg.onpointercancel = () => {
-      overlay.remove();
-      svg.onpointermove = null;
-      svg.onpointerup = null;
-    };
-  };
-  $("#time-window").textContent =
-    t9n("{start} → {end} · {count} matching spans", { start: format(vb.start), end: vb.duration < 10000 ? "+" + format(vb.duration) : format(vb.end), count: layout.spans.toLocaleString() });
+  updateTimelineNavigation();
   previewTimeline();
+  if(restoreFocus){const match=focusedSpan?[...svg.querySelectorAll("[data-span-id]")].find(e=>e.dataset.spanId===focusedSpan):null;(match||svg).focus({preventScroll:true});}
+}
+let resourceWindow=null,resourceContext="",resourceData=null,resourceController=null,resourceLoadKey="",resourceFailedKey="",resourceGeneration=0,resourceBusy=false,resourceTimer=null,resourceBrush=false,resourceSelectedCount=0;
+function resourceRange(){return resourceWindow?.view||bounds();}
+function loadResourceDetail(key,context,view){
+  resourceController?.abort();clearTimeout(resourceTimer);const generation=++resourceGeneration;
+  const controller=new AbortController();resourceController=controller;resourceBusy=true;resourceLoadKey=key;
+  const run=state.runKey,task=state.task,runtime=state.runtime,local=state.imports.get(run);
+  resourceTimer=setTimeout(async()=>{
+    try{
+      let data;
+      if(local){const samples=TraceXResources.slice(local.resources,view,task,runtime);data={profile:{resources:samples},total_resources:samples.length,resource_error:""};}
+      else{
+        const params=new URLSearchParams({run,start_ms:view.start,end_ms:view.end,points:1000,limit:1});
+        if(task!=="all")params.set("task",task);if(runtime!=="all")params.set("runtime",runtime);
+        data=await json("/api/view?"+params,{signal:controller.signal});
+      }
+      if(generation!==resourceGeneration)return;
+      resourceData={key,context,samples:data.profile.resources,total:data.total_resources??data.profile.resources.length,error:data.resource_error||""};resourceFailedKey="";
+    }catch(e){if(generation===resourceGeneration&&e.name!=="AbortError")resourceFailedKey=key;}
+    finally{
+      if(generation===resourceGeneration){resourceBusy=false;resourceController=null;if(!resourceBrush)drawResources();}
+    }
+  },70);
 }
 function drawResources() {
-  const total = bounds().duration;
-  const selected = state.profile.resources.filter(
-    (r) =>
-      (state.task === "all" || r.task_id === state.task || !r.task_id) &&
-      (state.runtime === "all" ||
-        (r.runtime_id || r.component) === state.runtime),
-  );
+  if(!state.profile)return;
+  const b=bounds(),base=[state.runKey,state.task,b.start,b.end].join("|"),context=[base,state.runtime].join("|");
+  if(base!==resourceContext){
+    resourceContext=base;resourceWindow=TraceXResources.createWindow(b.start,b.end);resourceData=null;resourceFailedKey="";
+  }
+  const view=resourceRange(),total=view.duration,key=[context,state.revision,view.start,view.end].join("|");
+  if(resourceBusy&&resourceLoadKey!==key){resourceController?.abort();clearTimeout(resourceTimer);resourceGeneration++;resourceBusy=false;resourceLoadKey="";}
+  if(resourceData?.key!==key&&resourceLoadKey!==key&&resourceFailedKey!==key)loadResourceDetail(key,context,view);
+  const samples=resourceData?.context===context?resourceData.samples:state.profile.resources;
+  const selected=TraceXResources.slice(samples,view,state.task,state.runtime);resourceSelectedCount=selected.length;
+  $("#resource-back").disabled=!resourceWindow.canBack;$("#resource-reset").disabled=resourceWindow.isFull;
+  $("#resource-zoom-out").disabled=resourceWindow.isFull;
+  $("#resource-interval").textContent=t9n("Resource window: {start} → {end}",{start:format(view.start),end:format(view.end)});
+  $("#resource-load-status").textContent=resourceBusy?t9n("Loading detailed samples…"):resourceFailedKey===key?t9n("Could not load detail. Previous samples retained."):"";
+  $("#resource-retry").hidden=resourceFailedKey!==key;
+  $(".resource-grid").setAttribute("aria-busy",String(resourceBusy));
+  const error=resourceData?.key===key?resourceData.error:"";
+  $("#resource-message").hidden=!error;$("#resource-message").textContent=t9n(error);
+  $(".resource-controls .tag").textContent=resourceData?.key===key?t9n("{returned} / {total} samples",{returned:selected.length.toLocaleString(),total:resourceData.total.toLocaleString()}):t9n("{count} preview samples",{count:selected.length});
   drawChart($("#cpu-chart"), selected, "cpu_percent", total, colors.agent);
   drawChart($("#memory-chart"), selected, "memory_bytes", total, colors.model);
   drawChart($("#gpu-chart"), selected, "gpu_percent", total, colors.tool);
@@ -1716,42 +1778,11 @@ function drawResources() {
 }
 // Monitor network counters are cumulative per runtime; rates come from
 // consecutive samples of one series. Counter resets yield no rate.
-function networkRates(samples) {
-  const series = new Map(),
-    out = [];
-  for (const r of samples) {
-    if (!Number.isFinite(r.network_rx_bytes) && !Number.isFinite(r.network_tx_bytes))
-      continue;
-    const id = r.runtime_id || `${r.task_id}/${r.component}`;
-    if (!series.has(id)) series.set(id, []);
-    series.get(id).push(r);
-  }
-  for (const rs of series.values()) {
-    rs.sort((a, b) => a.time_ms - b.time_ms);
-    for (let i = 1; i < rs.length; i++) {
-      const a = rs[i - 1],
-        b = rs[i],
-        dt = (b.time_ms - a.time_ms) / 1000,
-        d =
-          (b.network_rx_bytes ?? 0) -
-          (a.network_rx_bytes ?? 0) +
-          (b.network_tx_bytes ?? 0) -
-          (a.network_tx_bytes ?? 0);
-      out.push({
-        task_id: b.task_id,
-        component: b.component,
-        runtime_id: b.runtime_id,
-        time_ms: b.time_ms,
-        network_rate: dt > 0 && d >= 0 ? d / dt : null,
-      });
-    }
-  }
-  return out;
-}
+function networkRates(samples) {return TraceXResources.rates(samples);}
 function resourceEmptyLabel() {
-  if (state.resourceError) return t9n("Samples not displayed");
-  if (!state.resourceReturned && (state.task !== "all" || state.runtime !== "all" || state.rangeStart > 0 || state.rangeEnd != null))
-    return t9n("No samples in selection");
+  if(resourceBusy)return t9n("Loading samples…");
+  if(resourceData?.error)return t9n("Samples not displayed");
+  if(!resourceSelectedCount)return t9n("No samples in selection");
   return t9n("Not measured");
 }
 function drawChart(svg, samples, key, total, tint, axis) {
@@ -1815,12 +1846,12 @@ function drawChart(svg, samples, key, total, tint, axis) {
           "text-anchor": "middle",
           class: "chart-axis",
         },
-        format(bounds().start + (total * i) / 4),
+        total<1000&&i>0?"+"+format(total*i/4):format(resourceRange().start + (total * i) / 4),
       ),
     );
   const series = new Map();
   for (const r of samples) {
-    const id = r.runtime_id || `${r.task_id}/${r.component}`;
+    const id = TraceXResources.seriesKey(r);
     if (!series.has(id)) series.set(id, []);
     series.get(id).push(r);
   }
@@ -1844,7 +1875,7 @@ function drawChart(svg, samples, key, total, tint, axis) {
         continue;
       }
       const x =
-          left + ((r.time_ms - bounds().start) / total) * (w - left - right),
+          left + ((r.time_ms - resourceRange().start) / total) * (w - left - right),
         y = h - bottom - (r[key] / max) * (h - bottom - top);
       path += `${drawing && r.time_ms - prev <= interval * 2.5 ? "L" : "M"}${x.toFixed(2)},${y.toFixed(2)} `;
       drawing = true;
@@ -1857,7 +1888,7 @@ function drawChart(svg, samples, key, total, tint, axis) {
       "stroke-width": 1.6,
       "stroke-linecap": "round",
     });
-    line.append(node("title", {}, `${id} · ${rs[0]?.component || "runtime"}`));
+    line.append(node("title", {}, `${rs[0]?.runtime_id||""} · ${rs[0]?.component || "runtime"}`));
     svg.append(line);
     if (rs.length === 1 && Number.isFinite(rs[0][key]))
       svg.append(
@@ -1872,7 +1903,9 @@ function drawChart(svg, samples, key, total, tint, axis) {
       );
   }
 }
+let spanRequest=0,inspectorSuppressed=false;
 async function selectSpan(id) {
+  const request=++spanRequest,run=state.runKey;
   let s = state.profile.spans.find((s) => s.id === id),
     related = [],
     stats;
@@ -1894,7 +1927,8 @@ async function selectSpan(id) {
     notify(t9n("Span details unavailable: {error}", { error: e.message }));
     return;
   }
-  if (!s) return;
+  if (!s||request!==spanRequest||run!==state.runKey) return;
+  inspectorSuppressed=false;
   state.selected = id;
   window.dispatchEvent(new Event("tracex:selection"));
   TraceXMotion.visible($("#inspector"), true);
@@ -1904,6 +1938,9 @@ async function selectSpan(id) {
   const k = html("div", "detail-kind", kind(s));
   k.style.color = color(s);
   content.append(k, html("h2", "detail-title", s.name));
+  const graphAction=html("button","button detail-button",t9n("Focus DAG neighborhood"));
+  graphAction.disabled=!visible().some(n=>n.id===s.id);
+  graphAction.onclick=()=>focusDAGNeighborhood(s.id);content.append(graphAction);
   const durationUnknown =
     s.incomplete ||
     ["completion_only", "unknown"].includes(s.attributes?.time_quality);
@@ -2088,6 +2125,8 @@ async function jumpToSpan(id) {
   selectSpan(id);
 }
 function closeInspector() {
+  inspectorSuppressed=false;
+  ++spanRequest;
   state.selected = null;
   window.dispatchEvent(new Event("tracex:selection"));
   TraceXMotion.visible($("#inspector"), false);
@@ -2180,9 +2219,43 @@ $("#kind-filter").onchange = (e) => {
   loadView();
 };
 $("#resource-filter").onchange = (e) => {
-  state.runtime = e.target.value;
-  loadView();
+  state.runtime=e.target.value;drawResources();window.dispatchEvent(new CustomEvent("tracex:view"));
 };
+function setResourceRange(start,end,remember=true){
+  if(resourceWindow?.set(start,end,remember))drawResources();
+}
+function zoomResources(factor,at=.5,remember=true){const v=resourceRange(),anchor=v.start+v.duration*at,d=v.duration*factor;setResourceRange(anchor-d*at,anchor+d*(1-at),remember);}
+$("#resource-back").onclick=()=>{if(resourceWindow?.back())drawResources();};
+$("#resource-reset").onclick=()=>{if(resourceWindow?.reset())drawResources();};
+$("#resource-zoom-in").onclick=()=>zoomResources(.5);
+$("#resource-zoom-out").onclick=()=>zoomResources(2);
+$("#resource-use-timeline").onclick=()=>{const v=viewBounds();setResourceRange(v.start,v.end);};
+$("#resource-retry").onclick=()=>{resourceFailedKey=resourceLoadKey="";drawResources();};
+let resourceWheelTimer=null;
+for(const svg of document.querySelectorAll(".resource-chart svg")){
+  let brush=null;
+  TraceXTimeline.bindGestures(svg,{
+    geometry:()=>{const r=svg.getBoundingClientRect();return {labelWidth:r.width*37/500,plotWidth:r.width*453/500};},
+    view:resourceRange,setView:setResourceRange,mode:()=>"select",select:setResourceRange,
+    overlay:range=>{
+      brush?.remove();brush=null;
+      if(range){const scale=500/svg.getBoundingClientRect().width;brush=node("rect",{x:range.x*scale,y:10,width:range.width*scale,height:80,class:"timeline-brush","pointer-events":"none"});svg.append(brush);}
+    },
+    active:on=>{resourceBrush=on;},settle:()=>{if(!resourceBrush)drawResources();},
+  });
+  svg.addEventListener("wheel",e=>{
+    if(!e.ctrlKey&&!e.metaKey&&!(Math.abs(e.deltaX)>Math.abs(e.deltaY)))return;
+    e.preventDefault();const remember=resourceWheelTimer===null;
+    clearTimeout(resourceWheelTimer);resourceWheelTimer=setTimeout(()=>{resourceWheelTimer=null;},180);
+    if(e.ctrlKey||e.metaKey){const r=svg.getBoundingClientRect(),at=Math.max(0,Math.min(1,((e.clientX-r.left)/r.width*500-37)/453));zoomResources(Math.exp(Math.max(-.7,Math.min(.7,e.deltaY*(e.deltaMode===1?16:1)*.01))),at,remember);}
+    else {const v=resourceRange(),delta=e.deltaX/svg.getBoundingClientRect().width*v.duration;setResourceRange(v.start+delta,v.end+delta,remember);}
+  },{passive:false});
+  svg.addEventListener("keydown",e=>{
+    if(e.key==="+"||e.key==="="){e.preventDefault();zoomResources(.5);}
+    else if(e.key==="-"){e.preventDefault();zoomResources(2);}
+    else if(e.key==="ArrowLeft"||e.key==="ArrowRight"){e.preventDefault();const v=resourceRange(),d=v.duration*.25*(e.key==="ArrowLeft"?-1:1);setResourceRange(v.start+d,v.end+d);}
+  });
+}
 // Zoom is the analysis window's duration over the view's; the slider is
 // logarithmic (0..20 is 1x..about 1,000,000x) and zooms about the center.
 function showZoom() {
@@ -2223,6 +2296,38 @@ $("#timeline-scroll").addEventListener(
   },
   { passive: false },
 );
+let brushOverlay=null;
+TraceXTimeline.bindGestures($("#timeline"),{
+  geometry:timelineGeometry,view:viewBounds,setView,mode:()=>"select",
+  select:(start,end)=>{setView(start,end);},
+  overlay:range=>{
+    brushOverlay?.remove();brushOverlay=null;
+    if(range){brushOverlay=node("rect",{x:range.x,y:27,width:range.width,height:Math.max(0,$("#timeline").viewBox.baseVal.height-27),class:"timeline-brush","pointer-events":"none"});$("#timeline").append(brushOverlay);}
+  },
+  active:(on,kind)=>{timelineGesture=on?kind:false;},
+  settle:()=>{scheduleTimelineDraw();window.dispatchEvent(new CustomEvent("tracex:view"));},
+});
+function panTimeline(direction){const v=viewBounds(),d=v.duration*.75*direction;setView(v.start+d,v.end+d);}
+function zoomTimeline(factor){const v=viewBounds(),c=(v.start+v.end)/2,d=v.duration*factor;setView(c-d/2,c+d/2);}
+$("#timeline-fit-task").onclick=()=>{
+  const task=state.profile.tasks.find(t=>t.id===state.task);
+  if(task?.duration_ms>0)setView(task.start_ms,task.start_ms+task.duration_ms);
+};
+$("#timeline-back").onclick=()=>panTimeline(-1);
+$("#timeline-forward").onclick=()=>panTimeline(1);
+$("#timeline-zoom-in").onclick=()=>zoomTimeline(.5);
+$("#timeline-zoom-out").onclick=()=>zoomTimeline(2);
+$("#timeline-position").oninput=e=>{const b=bounds(),v=viewBounds(),start=b.start+(b.duration-v.duration)*Number(e.target.value)/1000;setView(start,start+v.duration);};
+$("#timeline-retry").onclick=()=>{timelineFailedKey="";$("#timeline-retry").hidden=true;loadTimeline();};
+$("#timeline").addEventListener("keydown",e=>{
+  if(e.target.closest(".timeline-bar"))return;
+  const v=viewBounds(),b=bounds();
+  if(e.key==="ArrowLeft"||e.key==="ArrowRight"){e.preventDefault();panTimeline(e.key==="ArrowLeft"?-1:1);}
+  else if(e.key==="+"||e.key==="="){e.preventDefault();zoomTimeline(.5);}
+  else if(e.key==="-"){e.preventDefault();zoomTimeline(2);}
+  else if(e.key==="Home"){e.preventDefault();setView(b.start,b.start+v.duration);}
+  else if(e.key==="End"){e.preventDefault();setView(b.end-v.duration,b.end);}
+});
 $("#reset-time").onclick = () => setView(-Infinity, Infinity);
 $("#apply-range").onclick = () =>
   applyRange(
@@ -2244,20 +2349,35 @@ $("#highlight-critical").onclick = () => {
 $("#compare-button").onclick = compareRuns;
 $("#sweep-button").onclick = plotSweep;
 $("#sweep-runs").onchange = updateSweepControls;
-$("#fit-graph").onclick = () => {
-  const svg = $("#dag"),
-    w = svg.viewBox.baseVal.width,
-    h = svg.viewBox.baseVal.height,
-    viewport = $("#dag-scroll");
-  const scale = Math.min(
-    1,
-    viewport.clientWidth / w,
-    viewport.clientHeight / h,
-  );
-  svg.setAttribute("width", Math.max(1, w * scale));
-  svg.setAttribute("height", Math.max(1, h * scale));
-  viewport.scrollTo(0, 0);
+$("#fit-graph").onclick=()=>{
+  if(!dagSize)return;const viewport=$("#dag-scroll");
+  dagScale=Math.max(.2,Math.min(1,viewport.clientWidth/dagSize.width,viewport.clientHeight/dagSize.height));applyDAGScale();viewport.scrollTo(0,0);
 };
+$("#dag-zoom-in").onclick=()=>zoomDAG(1.25);
+$("#dag-zoom-out").onclick=()=>zoomDAG(.8);
+$("#dag-actual-size").onclick=()=>{dagScale=1;applyDAGScale();};
+$("#dag-expand-all").onclick=()=>{dagAll=true;dagCollapsed.clear();drawDAG(visible());};
+$("#dag-collapse-all").onclick=()=>{dagAll=false;dagExpanded.clear();dagCollapsed.clear();dagLimits.clear();dagFocus=null;drawDAG(visible());};
+$("#dag-unlinked").onchange=e=>{dagUnlinked=e.target.checked;drawDAG(visible());};
+function focusDAGNeighborhood(id){
+  if(!id)return;++spanRequest;inspectorSuppressed=true;dagFocus=id;state.view="dag";
+  TraceXMotion.visible($("#inspector"),false);document.body.classList.remove("inspecting");
+  renderViews();$("#dag-scroll").scrollTo(0,0);$("#dag-scroll").focus({preventScroll:true});
+}
+$("#dag-focus").onclick=()=>focusDAGNeighborhood(state.selected);
+$("#dag-context").onclick=()=>{dagFocus=null;drawDAG(visible());};
+let dagDrag=null;
+$("#dag-scroll").addEventListener("pointerdown",e=>{
+  if(e.button!==0||e.target.closest(".dag-node,.dag-fold"))return;
+  e.preventDefault();const v=$("#dag-scroll");v.focus({preventScroll:true});dagDrag={id:e.pointerId,x:e.clientX,y:e.clientY,left:v.scrollLeft,top:v.scrollTop};v.setPointerCapture(e.pointerId);
+});
+$("#dag-scroll").addEventListener("pointermove",e=>{
+  if(!dagDrag||dagDrag.id!==e.pointerId)return;e.preventDefault();const v=$("#dag-scroll");v.classList.add("dragging");v.scrollLeft=dagDrag.left+dagDrag.x-e.clientX;v.scrollTop=dagDrag.top+dagDrag.y-e.clientY;
+});
+for(const event of ["pointerup","pointercancel","lostpointercapture"])$("#dag-scroll").addEventListener(event,()=>{dagDrag=null;$("#dag-scroll").classList.remove("dragging");});
+$("#dag-scroll").addEventListener("wheel",e=>{
+  if(!e.ctrlKey&&!e.metaKey)return;e.preventDefault();const r=$("#dag-scroll").getBoundingClientRect();zoomDAG(Math.exp(-e.deltaY*.005),{x:e.clientX-r.left,y:e.clientY-r.top});
+},{passive:false});
 $("#overview").onclick = () => {
   if (!state.profile) return;
   resetFilters();

@@ -21,6 +21,12 @@ func numeric(r *http.Request, key string, def float64) (float64, error) {
 	}
 	return x, nil
 }
+type runtimeInfo struct {
+	ID        string `json:"id"`
+	Component string `json:"component"`
+	TaskID    string `json:"task_id,omitempty"`
+}
+
 func (ws *workspace) view(w http.ResponseWriter, r *http.Request, s *snapshot, id string) {
 	start, e := numeric(r, "start_ms", 0)
 	if e != nil {
@@ -90,7 +96,7 @@ func (ws *workspace) view(w http.ResponseWriter, r *http.Request, s *snapshot, i
 	}
 	// Parent IDs remain evidence but missing parents are explicitly identified by hidden_edges.
 	resources := []profile.Resource{}
-	runtimes := map[string]bool{}
+	runtimes := map[string]runtimeInfo{}
 	runtimeFilter := r.URL.Query().Get("runtime")
 	resourceFirst := sort.Search(len(s.p.Resources), func(i int) bool { return s.p.Resources[i].TimeMS >= start })
 	resourceLast := sort.Search(len(s.p.Resources), func(i int) bool { return s.p.Resources[i].TimeMS > end })
@@ -98,7 +104,9 @@ func (ws *workspace) view(w http.ResponseWriter, r *http.Request, s *snapshot, i
 		if task != "" && v.TaskID != "" && v.TaskID != task {
 			continue
 		}
-		runtimes[v.RuntimeID] = true
+		if _, ok := runtimes[v.RuntimeID]; !ok {
+			runtimes[v.RuntimeID] = runtimeInfo{ID: v.RuntimeID, Component: v.Component, TaskID: v.TaskID}
+		}
 		if runtimeFilter == "" || v.RuntimeID == runtimeFilter {
 			resources = append(resources, v)
 		}
@@ -128,7 +136,13 @@ func (ws *workspace) view(w http.ResponseWriter, r *http.Request, s *snapshot, i
 		runtimeIDs = append(runtimeIDs, runtime)
 	}
 	sort.Strings(runtimeIDs)
-	ws.reply(w, r, map[string]any{"profile": p, "total_spans": total, "offset": offset, "limit": limit, "has_more": hi < total, "revision": s.revision, "analysis": s.analysis, "total_resources": len(resources), "run_id": id, "hidden_edges": hidden, "returned_resources": len(p.Resources), "runtime_ids": runtimeIDs, "resource_points_limit": points, "resources_sampled": resourceError == "" && len(p.Resources) < len(resources), "resource_error": resourceError})
+	// Descriptors name each runtime's role and owning task so a selector can
+	// label containers that the downsampled samples do not happen to include.
+	described := make([]runtimeInfo, 0, len(runtimeIDs))
+	for _, id := range runtimeIDs {
+		described = append(described, runtimes[id])
+	}
+	ws.reply(w, r, map[string]any{"runtimes": described,"profile": p, "total_spans": total, "offset": offset, "limit": limit, "has_more": hi < total, "revision": s.revision, "analysis": s.analysis, "total_resources": len(resources), "run_id": id, "hidden_edges": hidden, "returned_resources": len(p.Resources), "runtime_ids": runtimeIDs, "resource_points_limit": points, "resources_sampled": resourceError == "" && len(p.Resources) < len(resources), "resource_error": resourceError})
 }
 
 // Each runtime/component/task series receives its own envelope. Budget is per

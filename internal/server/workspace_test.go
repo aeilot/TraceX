@@ -267,6 +267,15 @@ func TestManyRuntimesPreservesViewAndSelector(t *testing.T) {
 	if v["resource_error"] != "" || len(v["runtime_ids"].([]any)) != 45 {
 		t.Fatal("runtime selector did not persist", v)
 	}
+	// Every runtime is described with its owning task, including the ones
+	// excluded from the returned samples by the runtime filter.
+	described := v["runtimes"].([]any)
+	if len(described) != 45 {
+		t.Fatal("runtime descriptors missing", len(described))
+	}
+	if d := described[0].(map[string]any); d["id"] != "runtime-00" || d["task_id"] != p.Tasks[0].ID {
+		t.Fatal("runtime descriptor lacks identity", d)
+	}
 	pp = v["profile"].(map[string]any)
 	if len(pp["resources"].([]any)) != 30 {
 		t.Fatal("runtime narrowing did not recover signal")

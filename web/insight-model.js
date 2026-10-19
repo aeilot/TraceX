@@ -32,7 +32,35 @@
     const previous=new Map();let periods=0,throttled=0;
     for(const r of [...p.resources].sort((a,b)=>a.time_ms-b.time_ms)){if(!r.cpu_throttling)continue;const key=[r.task_id,r.runtime_id,r.component].join("\0"),prev=previous.get(key);if(prev&&r.time_ms>prev.time_ms){const dp=r.cpu_throttling.periods-prev.cpu_throttling.periods,dt=r.cpu_throttling.throttled_periods-prev.cpu_throttling.throttled_periods;if(dp>0&&dt>=0&&dt<=dp){periods+=dp;throttled+=dt;}}previous.set(key,r);}
     if(periods>0&&throttled/periods>=.1){const f=finding("throttling","warning");f.value=throttled/periods;out.findings.push(f);}
+    const pause=suspension(p);if(pause)out.findings.push(pause);
     return out;
+  }
+  // Mirrors the server rule: the paused share of agent time counts only tasks
+  // with both pauses and agent spans; resource details use sandbox samples
+  // inside a pause, where CPU stops but memory stays held.
+  function suspension(p) {
+    const f={...finding("sandbox_suspension"),details:{}},paused=new Map(),agent=new Map(),unpause=[];
+    const push=(m,k,v)=>{if(!m.has(k))m.set(k,[]);m.get(k).push(v);};
+    for(const s of p.spans){
+      if(s.kind==="suspended"&&!s.incomplete){f.count++;add(f.span_ids,s.id);push(paused,s.task_id,[s.start_ms,s.start_ms+s.duration_ms]);const v=s.attributes?.unpause_latency_ms;if(Number.isFinite(v)&&v>=0)unpause.push(v);if(bad(s.status))f.details.failed_unpauses=(f.details.failed_unpauses||0)+1;}
+      else if(s.kind==="agent"&&known(s))push(agent,s.task_id,[s.start_ms,s.start_ms+s.duration_ms]);
+    }
+    if(!f.count)return null;
+    let pausedMS=0,agentMS=0;
+    for(const task of [...paused.keys()].sort()){add(f.task_ids,task);if(agent.has(task)){pausedMS+=union([...paused.get(task)]);agentMS+=union([...agent.get(task)]);}}
+    if(agentMS>0){f.value=pausedMS/agentMS;f.details.paused_ms=pausedMS;f.details.agent_ms=agentMS;}
+    if(unpause.length){unpause.sort((a,b)=>a-b);f.details.unpause_p50_ms=quantile(unpause,.5);f.details.unpause_p99_ms=quantile(unpause,.99);}
+    // A CPU sample covers the interval since its series' previous sample, so it
+    // counts only when that whole interval lies inside one pause.
+    const memory=[],cpu=[],avg=xs=>xs.reduce((a,b)=>a+b,0)/xs.length,previous=new Map();
+    const within=(task,t)=>(paused.get(task)||[]).findIndex(([a,b])=>t>=a&&t<=b);
+    for(const r of [...p.resources].sort((a,b)=>a.time_ms-b.time_ms)){
+      if(r.component!=="sandbox")continue;const key=r.task_id+"\0"+r.runtime_id,prev=previous.get(key);previous.set(key,r.time_ms);
+      const i=within(r.task_id,r.time_ms);if(i<0)continue;
+      if(Number.isFinite(r.memory_bytes))memory.push(r.memory_bytes);if(Number.isFinite(r.cpu_percent)&&prev!==undefined&&within(r.task_id,prev)===i)cpu.push(r.cpu_percent);
+    }
+    if(memory.length)f.details.paused_memory_bytes=avg(memory);if(cpu.length)f.details.paused_cpu_percent=avg(cpu);
+    return f;
   }
   function scope(p,task,start=0,end=Infinity) {
     const spans=p.spans.filter(s=>(!task||s.task_id===task)&&s.start_ms<=end&&s.start_ms+s.duration_ms>=start),ids=new Set(spans.map(s=>s.id));

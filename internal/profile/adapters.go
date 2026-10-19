@@ -249,12 +249,12 @@ func safeConfiguration(root string) map[string]any {
 				}
 			}
 		}
-		for _, k := range []string{"concurrency", "cpu_limit", "memory_limit_mb", "harness_cpu_limit", "harness_memory_limit_mb", "sandbox_cpu_limit", "sandbox_memory_limit_mb", "temperature", "max_tokens", "context_length", "agent_timeout_seconds", "sandbox_shm_size_mb", "task_count"} {
+		for _, k := range []string{"concurrency", "cpu_limit", "memory_limit_mb", "harness_cpu_limit", "harness_memory_limit_mb", "sandbox_cpu_limit", "sandbox_memory_limit_mb", "temperature", "max_tokens", "context_length", "agent_timeout_seconds", "sandbox_shm_size_mb", "task_count", "bridge_suspend_grace_ms"} {
 			if n := optionalNumber(v, k); n != nil {
 				out[k] = *n
 			}
 		}
-		for _, k := range []string{"reasoning_effort", "harness_image", "sandbox_image"} {
+		for _, k := range []string{"reasoning_effort", "harness_image", "sandbox_image", "bridge_suspend_mode"} {
 			if value := text(v[k]); value != "" && len(value) <= 256 {
 				out[k] = value
 			}

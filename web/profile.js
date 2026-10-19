@@ -61,6 +61,9 @@
     "task_count",
     "harness_image",
     "sandbox_image",
+    "bridge_suspend_mode",
+    "bridge_suspend_grace_ms",
+    "observed_sandbox_suspend",
   ]);
   const edgeKinds = new Set([
     "parent",

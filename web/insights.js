@@ -25,10 +25,13 @@
       coverage_gap:["Unobserved task time","{count} tasks have less than 70% observed-work coverage; {value} is unobserved in total.","Check instrumentation coverage. Unobserved time is not a measured wait."],
       usage_gap:["Incomplete model usage","{count} leaf model records lack input or output usage.","Complete usage instrumentation before comparing token totals or estimating cost."],
       throttling:["CPU throttling observed","{value} of observed enforcement periods were throttled.","Compare CPU quotas while holding other recorded conditions fixed. Correlation does not establish the cause of slow spans."],
+      sandbox_suspension:["Sandbox suspension","{count} sandbox pauses cover {value} of agent time. Unpause latency p50 {p50}, p99 {p99}. Sample intervals entirely inside a pause averaged {cpu} sandbox CPU; memory readings taken while paused averaged {memory}.","Pausing frees CPU but not memory. Compare against an unpaused run under the same recorded conditions before attributing savings."],
     };
     const [title,description,action]=strings[f.rule] || ["Evidence finding","Inspect the recorded evidence.","Inspect the recorded evidence."];
-    const value=f.rule==="slow_tasks"?f.value.toFixed(2)+"×":f.rule==="throttling"?(f.value*100).toFixed(1)+"%":format(f.value);
-    return {title:t9n(title),description:t9n(description,{count:f.count,value}),action:t9n(action)};
+    const d=f.details||{},missing=t9n("not measured");
+    const value=f.rule==="slow_tasks"?f.value.toFixed(2)+"×":f.rule==="throttling"?(f.value*100).toFixed(1)+"%":f.rule==="sandbox_suspension"?(d.agent_ms?(f.value*100).toFixed(1)+"%":missing):format(f.value);
+    const extra=f.rule==="sandbox_suspension"?{p50:d.unpause_p50_ms!=null?format(d.unpause_p50_ms):missing,p99:d.unpause_p99_ms!=null?format(d.unpause_p99_ms):missing,cpu:d.paused_cpu_percent!=null?d.paused_cpu_percent.toFixed(1)+"%":missing,memory:d.paused_memory_bytes!=null?bytes(d.paused_memory_bytes):missing}:{};
+    return {title:t9n(title),description:t9n(description,{count:f.count,value,...extra}),action:t9n(action)};
   }
   function findingRefs(f,runID) {return [...f.span_ids.map(id=>ref(runID,"span",id)),...f.task_ids.map(id=>ref(runID,"task",id))];}
   function findings(target,data,limit=Infinity) {

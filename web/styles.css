@@ -766,10 +766,15 @@ select {
 .zoom-label {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 8px;
+}
+/* Fixed width so the slider does not shift as the readout grows. */
+.zoom-label output {
+  min-width: 9ch;
+  font-variant-numeric: tabular-nums;
 }
 .zoom-label input {
-  width: 73px;
+  width: clamp(120px, 28vw, 240px);
   height: 14px;
   accent-color: #5c9276;
 }

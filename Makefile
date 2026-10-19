@@ -7,6 +7,9 @@ build:
 test:
 	go test ./...
 test-web:
+	node --check web/resource-view.js
+	node --check web/dag.js
+	node --check web/timeline.js
 	node --check web/insight-model.js
 	node --check web/insights.js
 	node --check web/motion.js

@@ -14,6 +14,9 @@
     <script src="/profile.js" defer></script>
     <link rel="stylesheet" href="/styles.css" />
     <script src="/motion.js" defer></script>
+    <script src="/resource-view.js" defer></script>
+    <script src="/dag.js" defer></script>
+    <script src="/timeline.js" defer></script>
     <script src="/app.js" defer></script>
     <link rel="stylesheet" href="/experiments.css" />
     <link rel="stylesheet" href="/lab.css" />
@@ -356,7 +359,7 @@
             ><button id="full-range" class="button subtle small">
               Full run</button
             ><button id="insight-window" class="button small">Analyze this window</button><span class="brush-hint"
-              >Drag to pan · ⌘/Ctrl + scroll to zoom · Shift-drag to select a window</span
+              >Drag to zoom into a region</span
             >
           </div>
           <section id="dag-panel" class="visual-panel">
@@ -377,14 +380,28 @@
                 </button>
               </div>
             </div>
-            <div id="dag-scroll" class="dag-scroll">
+            <div class="dag-toolbar">
+              <button id="dag-collapse-all" class="button small">Structure overview</button>
+              <button id="dag-expand-all" class="button small">Expand page</button>
+              <label class="dag-unlinked-toggle"><input id="dag-unlinked" type="checkbox" />Show nodes without page links <span id="dag-unlinked-count">0</span></label>
+              <button id="dag-focus" class="button small" disabled>Focus selected neighborhood</button>
+              <button id="dag-context" class="button small" hidden>Return to structure</button>
+              <div class="dag-zoom-tools">
+                <button id="dag-zoom-out" class="button small" aria-label="Zoom DAG out">−</button>
+                <output id="dag-zoom-value">100%</output>
+                <button id="dag-zoom-in" class="button small" aria-label="Zoom DAG in">+</button>
+                <button id="dag-actual-size" class="button small">Actual size</button>
+              </div>
+            </div>
+            <div class="dag-help" id="dag-help">Drag the background to pan · ⌘/Ctrl + scroll to zoom · Hover a node to trace its links · Expand branches for details</div>
+            <div id="dag-scroll" class="dag-scroll" tabindex="0" aria-label="DAG canvas" aria-describedby="dag-help">
               <svg
                 id="dag"
                 role="group"
                 aria-label="Agent execution directed acyclic graph"
               ></svg>
               <div id="dag-empty" class="empty" hidden>
-                No matching execution spans.
+                No nodes in this overview. Show nodes without page links or return to structure.
               </div>
             </div>
           </section>
@@ -394,7 +411,9 @@
                 <span class="fig-no">Fig. 4b</span> Linear timeline
                 <span id="timeline-count" class="count-pill">0</span>
               </h3>
-              <div class="panel-tools">
+              <div class="panel-tools timeline-tools">
+                <span class="timeline-mode-label">Zoom to region</span>
+                <button id="timeline-zoom-out" class="button small" aria-label="Zoom out">−</button>
                 <label class="zoom-label"
                   >Zoom
                   <input
@@ -402,31 +421,41 @@
                     type="range"
                     min="0"
                     max="20"
-                    step="0.25"
+                    step="0.05"
                     value="0"
                     aria-label="Timeline zoom" /><output
                     id="zoom-value"
                     for="zoom"
                     >×1</output
                   ></label
-                ><button id="reset-time" class="button subtle small">
+                ><button id="timeline-zoom-in" class="button small" aria-label="Zoom in">+</button><button id="reset-time" class="button subtle small">
                   Reset
                 </button>
               </div>
             </div>
+            <div class="timeline-navigation">
+              <button id="timeline-fit-task" class="button small" disabled>Fit task</button>
+              <button id="timeline-back" class="button small" aria-label="Previous time window">←</button>
+              <input id="timeline-position" type="range" min="0" max="1000" step="1" value="0" aria-label="Position in analysis window" />
+              <button id="timeline-forward" class="button small" aria-label="Next time window">→</button>
+              <span id="timeline-boundary"></span>
+            </div>
             <div id="timeline-scroll" class="timeline-scroll">
               <svg
                 id="timeline"
+                class="range-mode"
+                tabindex="0"
+                aria-describedby="timeline-help"
                 role="group"
                 aria-label="Linear execution timeline"
               ></svg>
             </div>
             <div class="timeline-footer">
               <span id="time-window">—</span
-              ><span
-                >Hover for timing · Select for evidence · Scroll horizontally
-                when zoomed</span
-              >
+              ><span id="timeline-load-status" role="status" aria-live="polite"></span>
+              <button id="timeline-retry" class="button small" hidden>Retry loading</button>
+            </div>
+            <div id="timeline-help" class="timeline-help">Drag to zoom into a region · Scroll sideways or use arrow keys to move · + / − to zoom
             </div>
           </section>
           <div class="pagination">
@@ -451,6 +480,17 @@
             role="status"
             hidden
           ></p>
+          <div class="resource-range-toolbar">
+            <strong id="resource-interval"></strong>
+            <button id="resource-back" class="button small" disabled>Previous resource window</button>
+            <button id="resource-reset" class="button small" disabled>Reset resource zoom</button>
+            <button id="resource-zoom-in" class="button small">Zoom resources in</button>
+            <button id="resource-zoom-out" class="button small">Zoom resources out</button>
+            <button id="resource-use-timeline" class="button small">Use timeline window</button>
+            <span id="resource-load-status" role="status"></span>
+            <button id="resource-retry" class="button small" hidden>Retry loading</button>
+          </div>
+          <p id="resource-zoom-help" class="resource-zoom-help">Drag across any chart to zoom all signals · ⌘/Ctrl + scroll to zoom · Arrow keys to pan · + / − to zoom</p>
           <div class="resource-grid">
             <div class="resource-chart">
               <div class="chart-title">
@@ -458,7 +498,9 @@
               </div>
               <svg
                 id="cpu-chart"
-                role="img"
+                tabindex="0"
+                aria-describedby="resource-zoom-help"
+                role="group"
                 aria-label="CPU utilization over time"
               ></svg>
             </div>
@@ -468,7 +510,9 @@
               </div>
               <svg
                 id="memory-chart"
-                role="img"
+                tabindex="0"
+                aria-describedby="resource-zoom-help"
+                role="group"
                 aria-label="Memory usage over time"
               ></svg>
             </div>
@@ -478,7 +522,9 @@
               </div>
               <svg
                 id="gpu-chart"
-                role="img"
+                tabindex="0"
+                aria-describedby="resource-zoom-help"
+                role="group"
                 aria-label="GPU utilization over time"
               ></svg>
             </div>
@@ -488,7 +534,9 @@
               </div>
               <svg
                 id="network-chart"
-                role="img"
+                tabindex="0"
+                aria-describedby="resource-zoom-help"
+                role="group"
                 aria-label="Container network throughput over time"
               ></svg>
             </div>
@@ -498,7 +546,9 @@
               </div>
               <svg
                 id="throttle-chart"
-                role="img"
+                tabindex="0"
+                aria-describedby="resource-zoom-help"
+                role="group"
                 aria-label="Share of CPU enforcement periods throttled over time"
               ></svg>
             </div>

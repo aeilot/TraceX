@@ -384,6 +384,7 @@ func loadARIES(root string, cache *recordCache) (Profile, error) {
 		p.Warnings = appendUnique(p.Warnings, "Lifecycle phases require explicit start/end events; absent phase boundaries are unavailable.")
 	}
 	var resources []timedResource
+	suspendObserved := false
 	invalid := 0
 	opaque := false
 	monitorFailed := false
@@ -476,6 +477,7 @@ func loadARIES(root string, cache *recordCache) (Profile, error) {
 				if ok {
 					observe(x.start)
 					spans = append(spans, x)
+					suspendObserved = true
 				}
 			case "browser":
 				if x, ok := parseBrowser(v, a.task, line); ok {
@@ -764,6 +766,15 @@ func loadARIES(root string, cache *recordCache) (Profile, error) {
 		}
 	}
 	p.Capabilities = append(p.Capabilities, Capability{"spans", spanStatus, "Coverage depends on retained harness and bridge telemetry; absent events are not zero-duration work."}, Capability{"resources", resourceStatus, "Shared infrastructure is kept separate from task resources."}, Capability{"agent_dag", "partial", "Only explicit span parent relationships are shown; parallel timing does not imply causality."})
+	// Suspension is evidence, not a recorded setting: bridge pause intervals
+	// show it happened, but their absence cannot tell "off" from "proxy" or an
+	// ARIES build without suspension, so only the observed case is recorded.
+	if suspendObserved {
+		if p.Configuration == nil {
+			p.Configuration = map[string]any{}
+		}
+		p.Configuration["observed_sandbox_suspend"] = "pause"
+	}
 	if opaque {
 		p.Capabilities = append(p.Capabilities, Capability{"openclaw_trajectory", "unsupported", "Opaque trajectory data has no supported span timing contract; use bridge evidence or normalized spans."})
 	}

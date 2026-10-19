@@ -13,6 +13,8 @@ type Finding struct {
 	Count    int      `json:"count"`
 	SpanIDs  []string `json:"span_ids"`
 	TaskIDs  []string `json:"task_ids"`
+	// Details holds rule-specific measurements; an absent key was not measured.
+	Details map[string]float64 `json:"details,omitempty"`
 }
 type CallGroup struct {
 	Kind         string   `json:"kind"`
@@ -249,7 +251,109 @@ func Diagnose(p Profile, a Analysis) Insights {
 	if periods > 0 && throttled/periods >= .1 {
 		out.Findings = append(out.Findings, Finding{Rule: "throttling", Severity: "warning", Value: throttled / periods, SpanIDs: []string{}, TaskIDs: []string{}})
 	}
+	if f, ok := suspension(p); ok {
+		out.Findings = append(out.Findings, f)
+	}
 	return out
+}
+
+// suspension summarizes recorded sandbox pause intervals. Value is the paused
+// share of agent time, counted only in tasks that have both pause intervals
+// and agent spans. Resource details use sandbox samples taken inside a pause:
+// pausing stops CPU but keeps memory, which the held-memory mean makes visible.
+func suspension(p Profile) (Finding, bool) {
+	f := Finding{Rule: "sandbox_suspension", Severity: "info", SpanIDs: []string{}, TaskIDs: []string{}, Details: map[string]float64{}}
+	paused := map[string][]interval{}
+	agent := map[string][]interval{}
+	unpause := []float64{}
+	for _, s := range p.Spans {
+		switch {
+		case s.Kind == "suspended" && !s.Incomplete:
+			f.Count++
+			f.SpanIDs = boundedIDs(f.SpanIDs, s.ID)
+			paused[s.TaskID] = append(paused[s.TaskID], interval{s.StartMS, s.StartMS + s.DurationMS})
+			if v, ok := s.Attributes["unpause_latency_ms"].(float64); ok && validTime(v) {
+				unpause = append(unpause, v)
+			}
+			if badStatus(s.Status) {
+				f.Details["failed_unpauses"]++
+			}
+		case s.Kind == "agent" && measuredSpan(s):
+			agent[s.TaskID] = append(agent[s.TaskID], interval{s.StartMS, s.StartMS + s.DurationMS})
+		}
+	}
+	if f.Count == 0 {
+		return f, false
+	}
+	var pausedMS, agentMS float64
+	tasks := make([]string, 0, len(paused))
+	for task, xs := range paused {
+		tasks = append(tasks, task)
+		if len(agent[task]) > 0 {
+			pausedMS += unionMS(xs)
+			agentMS += unionMS(agent[task])
+		}
+	}
+	sort.Strings(tasks)
+	for _, task := range tasks {
+		f.TaskIDs = boundedIDs(f.TaskIDs, task)
+	}
+	if agentMS > 0 {
+		f.Value = pausedMS / agentMS
+		f.Details["paused_ms"], f.Details["agent_ms"] = pausedMS, agentMS
+	}
+	if len(unpause) > 0 {
+		sort.Float64s(unpause)
+		f.Details["unpause_p50_ms"], f.Details["unpause_p99_ms"] = quantile(unpause, .5), quantile(unpause, .99)
+	}
+	// Memory is a point reading; a CPU sample covers the interval since the
+	// series' previous sample, so it counts only when that whole interval lies
+	// inside one pause (otherwise work just before the pause leaks in).
+	within := func(task string, t float64) int {
+		for i, x := range paused[task] {
+			if t >= x.start && t <= x.end {
+				return i
+			}
+		}
+		return -1
+	}
+	resources := append([]Resource(nil), p.Resources...)
+	sort.SliceStable(resources, func(i, j int) bool { return resources[i].TimeMS < resources[j].TimeMS })
+	previous := map[string]float64{}
+	var memory, cpu []float64
+	for _, r := range resources {
+		if r.Component != "sandbox" {
+			continue
+		}
+		key := r.TaskID + "\x00" + r.RuntimeID
+		prev, seen := previous[key]
+		previous[key] = r.TimeMS
+		i := within(r.TaskID, r.TimeMS)
+		if i < 0 {
+			continue
+		}
+		if r.MemoryBytes != nil {
+			memory = append(memory, *r.MemoryBytes)
+		}
+		if r.CPUPercent != nil && seen && within(r.TaskID, prev) == i {
+			cpu = append(cpu, *r.CPUPercent)
+		}
+	}
+	if len(memory) > 0 {
+		f.Details["paused_memory_bytes"] = mean(memory)
+	}
+	if len(cpu) > 0 {
+		f.Details["paused_cpu_percent"] = mean(cpu)
+	}
+	return f, true
+}
+
+func mean(xs []float64) float64 {
+	total := 0.0
+	for _, x := range xs {
+		total += x
+	}
+	return total / float64(len(xs))
 }
 
 type TaskPair struct {

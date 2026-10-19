@@ -55,7 +55,7 @@ func (ws *workspace) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		name = "index.html"
 	}
-	if name != "index.html" && name != "i18n.js" && name != "app.js" && name != "profile.js" && name != "analytics.js" && name != "styles.css" && name != "lab.css" && name != "experiments.js" && name != "experiments.css" && name != "experiment-model.js" && name != "workspace.js" && name != "workspace-model.js" && name != "workspace.css" && name != "motion.css" && name != "motion.js" && name != "insight-model.js" && name != "insights.js" && name != "insights.css" {
+	if name != "resource-view.js" && name != "dag.js" && name != "timeline.js" && name != "index.html" && name != "i18n.js" && name != "app.js" && name != "profile.js" && name != "analytics.js" && name != "styles.css" && name != "lab.css" && name != "experiments.js" && name != "experiments.css" && name != "experiment-model.js" && name != "workspace.js" && name != "workspace-model.js" && name != "workspace.css" && name != "motion.css" && name != "motion.js" && name != "insight-model.js" && name != "insights.js" && name != "insights.css" {
 		http.NotFound(w, r)
 		return
 	}
