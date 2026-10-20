@@ -1,6 +1,6 @@
-# Run ARIES experiments
+# Run experiments
 
-TraceX can launch the real ARIES CLI as well as inspect existing evidence. Execution is opt-in: save an execution target in the experiment panel or provide `--aries-dir` before starting processes.
+TraceX can launch the real ARIES CLI or an AgentSysBench deployment as well as inspect existing evidence. One runner is configured at a time; choose the benchmark in **Runner settings**. AgentSysBench specifics are in [AgentSysBench runs](#agentsysbench-runs). Execution is opt-in: save an execution target in the experiment panel or provide `--aries-dir` before starting processes.
 
 ## Configure a runner
 
@@ -46,6 +46,12 @@ As ARIES creates its output directory, TraceX mounts it automatically and opens 
 Job state is held in memory. Generated configurations, private stdout/stderr and artifacts remain under `ARIES_DIR/.cache/tracex/jobs` (override with `--jobs-dir`). After restarting TraceX, inspect retained outputs with `--run JOB_DIR/artifacts/RUN_ID`; do not assume an interrupted service has cleaned an execution host. Keep experiment controls on loopback unless you intentionally grant other clients access to the execution host.
 
 Experiment-enabled serving requires watching; `--watch 0` becomes one second. Existing `--run` inputs and the two default synthetic demonstrations remain available alongside real runs. Export mode cannot be combined with `--aries-dir`.
+
+## AgentSysBench runs
+
+Configure with `--asb-dir /path/to/agent-sys-bench` (same `--aries-executor`/`--aries-machine` options) or choose **AgentSysBench** in Runner settings. The checkout must have run `scripts/setup.sh` and `scripts/configure-api.sh`; TraceX reads only the `*_MODEL` name from an agent's `config/.env` for display and never handles keys. On macOS choose an OrbStack machine: deployments need Linux Docker.
+
+The preset list is the ten deployments under `benchmark/deployment/`. Presets take a request count (the loadgen sends the first *N* manifest requests) and, except for `qa-rag`, `multimodal-hugginggpt` and `ai-search-deep-research`, a concurrency. Settings needing GPUs, KVM or x86_64 say so. **Prepare** builds the images and prepares data without model calls; **Run** drives the deployment, converts it into a live profile every 10 seconds, then cleans up, evaluates and archives. **Stop** runs the deployment's `3.cleanup.sh`. Cleanup is *confirmed* only when that script succeeds; harness status is per-request completion and evaluation is per-request reward. See the [adapter](../adapters/agentsysbench/README.md) for the field mapping and outputs.
 
 ## Configuration sweep
 

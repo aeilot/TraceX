@@ -9,3 +9,13 @@ test('arrival schedules cannot be subset and concurrency must be integral', () =
 test('disabled runners and empty task selections cannot launch', () => { assert.match(m.validate(p,['a'],1,false,true), /not ready/); assert.match(m.validate(p,[],1,true,true), /at least one/); assert.equal(m.request(p,['a'],1,true,'prepare').confirm_model_calls,false); });
 
 test('stop_failed still owns the runner until process exit', () => { for (const status of ['starting','running','stopping','stop_failed']) assert.equal(m.active(status), true); for (const status of ['succeeded','failed','canceled']) assert.equal(m.active(status), false); });
+test('request-count presets validate and submit a request count instead of tasks', () => {
+  const asb = {id:'browser-use-webagent', request_count:true, tasks:[]}, fixed = {...asb, id:'qa-rag', concurrency_fixed:true};
+  assert.match(m.validate(asb,[],1,true,true,'run',0), /Request count/);
+  assert.equal(m.validate(asb,[],1,true,true,'run',8), '');
+  assert.equal(m.validate(asb,[],1,true,false,'prepare',0), '');
+  assert.equal(m.validate(fixed,[],'',true,true,'run',2), '');
+  assert.deepEqual(m.request(asb,[],2,true,'run',8), {profile_id:'browser-use-webagent',action:'run',confirm_model_calls:true,request_num:8,concurrency:2});
+  assert.deepEqual(m.request(fixed,[],2,true,'run',3), {profile_id:'qa-rag',action:'run',confirm_model_calls:true,request_num:3});
+  assert.deepEqual(m.request(asb,[],2,false,'prepare',8), {profile_id:'browser-use-webagent',action:'prepare',confirm_model_calls:false,concurrency:2});
+});

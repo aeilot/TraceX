@@ -118,7 +118,7 @@ func TestDiscoveryListsMachinesAndReturnsOnlyCredentialPresence(t *testing.T) {
 	os.WriteFile(filepath.Join(toolDir, "orb"), []byte(script), 0700)
 	t.Setenv("PATH", toolDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("ARIES_DIR", root)
-	d := Discover(context.Background(), root)
+	d := Discover(context.Background(), root, BackendARIES)
 	if !d.OrbAvailable || len(d.Machines) != 1 || d.Machines[0] != "aries-vm" {
 		t.Fatalf("%+v", d)
 	}

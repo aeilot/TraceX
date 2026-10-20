@@ -1,4 +1,5 @@
-// Package experiment owns explicitly configured ARIES child processes.
+// Package experiment owns explicitly configured benchmark child processes:
+// the ARIES CLI or an AgentSysBench deployment driver.
 package experiment
 
 import (
@@ -11,12 +12,13 @@ import (
 
 var (
 	ErrBusy     = errors.New("an experiment is already active")
-	ErrNotReady = errors.New("ARIES execution is not ready")
+	ErrNotReady = errors.New("experiment execution is not ready")
 	ErrNotFound = errors.New("experiment or profile not found")
 	ErrInvalid  = errors.New("invalid experiment request")
 )
 
 type Config struct {
+	Backend                                  string // "aries" (default) or "agentsysbench"
 	Root, Binary, Executor, Machine, JobsDir string
 	StopTimeout                              time.Duration
 	OnArtifacts                              func(string, string) (string, error)
@@ -34,8 +36,14 @@ type Preset struct {
 	Concurrency     int           `json:"concurrency"`
 	LoopDuration    string        `json:"loop_duration,omitempty"`
 	ArrivalSchedule bool          `json:"arrival_schedule"`
+	// AgentSysBench: the loadgen sends the first N manifest requests, so a
+	// request count replaces task selection.
+	RequestCount     bool   `json:"request_count,omitempty"`
+	ConcurrencyFixed bool   `json:"concurrency_fixed,omitempty"`
+	Hardware         string `json:"hardware,omitempty"`
 }
 type Catalog struct {
+	Backend  string   `json:"backend"`
 	Enabled  bool     `json:"enabled"`
 	Ready    bool     `json:"ready"`
 	Executor string   `json:"executor"`
@@ -49,6 +57,7 @@ type Request struct {
 	Action            string         `json:"action"`
 	Tasks             []string       `json:"tasks,omitempty"`
 	Concurrency       int            `json:"concurrency,omitempty"`
+	RequestNum        int            `json:"request_num,omitempty"`
 	ConfirmModelCalls bool           `json:"confirm_model_calls"`
 }
 type Job struct {
@@ -62,6 +71,7 @@ type Job struct {
 	Backend          string     `json:"backend"`
 	Tasks            []string   `json:"tasks"`
 	Concurrency      int        `json:"concurrency"`
+	RequestNum       int        `json:"request_num,omitempty"`
 	Status           string     `json:"status"`
 	StartedAt        time.Time  `json:"started_at"`
 	FinishedAt       *time.Time `json:"finished_at,omitempty"`

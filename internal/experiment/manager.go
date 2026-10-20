@@ -40,6 +40,9 @@ func (m *Manager) Start(req Request) (Job, error) {
 	if found == nil {
 		return Job{}, ErrNotFound
 	}
+	if m.cfg.Backend == BackendASB {
+		return m.startASB(req, found)
+	}
 	path := filepath.Join(m.cfg.Root, "profiles", filepath.FromSlash(req.ProfileID))
 	real, e := filepath.EvalSymlinks(path)
 	if e != nil {
@@ -95,17 +98,8 @@ func (m *Manager) Start(req Request) (Job, error) {
 		concurrency = req.Concurrency
 		obj(raw, "execution")["concurrency"] = concurrency
 	}
-	random := make([]byte, 12)
-	if _, e = rand.Read(random); e != nil {
-		return Job{}, e
-	}
-	id := hex.EncodeToString(random)
-	dir := filepath.Join(m.cfg.JobsDir, id)
-	if e = os.Mkdir(dir, 0700); e != nil {
-		return Job{}, e
-	}
-	artifacts := filepath.Join(dir, "artifacts")
-	if e = os.Mkdir(artifacts, 0700); e != nil {
+	dir, artifacts, id, e := m.jobDir()
+	if e != nil {
 		return Job{}, e
 	}
 	for _, key := range []string{"versions_file", "overrides_file"} {
@@ -132,12 +126,35 @@ func (m *Manager) Start(req Request) (Job, error) {
 	if e = os.WriteFile(profilePath, b, 0600); e != nil {
 		return Job{}, e
 	}
-	args := []string{}
+	args := []string{m.cfg.Binary}
 	if req.Action == "prepare" {
 		args = append(args, "setup")
 	}
 	args = append(args, profilePath)
-	cmd, e := m.command(dir, profilePath, args)
+	job := Job{ID: id, Action: req.Action, ProfileID: p.ID, Name: p.Name, Workload: p.Workload, Harness: p.Harness, Model: p.Model, Backend: p.Backend, Tasks: selected, Concurrency: concurrency}
+	return m.launch(job, dir, profilePath, args)
+}
+
+// jobDir creates a private job directory with an artifacts subdirectory.
+func (m *Manager) jobDir() (dir, artifacts, id string, err error) {
+	random := make([]byte, 12)
+	if _, err = rand.Read(random); err != nil {
+		return
+	}
+	id = hex.EncodeToString(random)
+	dir = filepath.Join(m.cfg.JobsDir, id)
+	if err = os.Mkdir(dir, 0700); err != nil {
+		return
+	}
+	artifacts = filepath.Join(dir, "artifacts")
+	err = os.Mkdir(artifacts, 0700)
+	return
+}
+
+// launch starts argv as an owned job. marker is a job-unique argument that
+// cancellation must find in the live command line before signaling it.
+func (m *Manager) launch(job Job, dir, marker string, argv []string) (Job, error) {
+	cmd, e := m.command(dir, argv)
 	if e != nil {
 		return Job{}, e
 	}
@@ -153,7 +170,8 @@ func (m *Manager) Start(req Request) (Job, error) {
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	cmd.Dir = m.cfg.Root
-	rec := &record{job: Job{ID: id, Action: req.Action, ProfileID: p.ID, Name: p.Name, Workload: p.Workload, Harness: p.Harness, Model: p.Model, Backend: p.Backend, Tasks: selected, Concurrency: concurrency, Status: "running", StartedAt: time.Now().UTC(), CleanupStatus: "pending"}, cmd: cmd, dir: dir, profile: profilePath, done: make(chan struct{})}
+	job.Status, job.StartedAt, job.CleanupStatus = "running", time.Now().UTC(), "pending"
+	rec := &record{job: job, cmd: cmd, dir: dir, profile: marker, done: make(chan struct{})}
 	m.jobs = append(m.jobs, rec)
 	if e = cmd.Start(); e != nil {
 		stdout.Close()
@@ -162,7 +180,7 @@ func (m *Manager) Start(req Request) (Job, error) {
 		rec.job.Status = "failed"
 		rec.job.FinishedAt = &now
 		rec.job.CleanupStatus = "not_started"
-		rec.job.Error = "ARIES process could not start; inspect private job logs"
+		rec.job.Error = m.runnerName() + " process could not start; inspect private job logs"
 		close(rec.done)
 		return copyJob(rec.job), nil
 	}
@@ -170,15 +188,40 @@ func (m *Manager) Start(req Request) (Job, error) {
 	go m.observe(rec, stdout, stderr)
 	return copyJob(rec.job), nil
 }
+
+// runnerName names the configured backend in operator-facing messages.
+func (m *Manager) runnerName() string {
+	if m.cfg.Backend == BackendASB {
+		return "AgentSysBench"
+	}
+	return "ARIES"
+}
+
+// hostPath reports whether an argument is a path on the TraceX host that the
+// execution machine reaches through its shared mount.
+func (m *Manager) hostPath(path string) bool {
+	if !filepath.IsAbs(path) {
+		return false
+	}
+	if m.cfg.Backend != BackendASB && path == m.cfg.Binary {
+		return true
+	}
+	for _, base := range []string{m.cfg.Root, m.cfg.JobsDir} {
+		if base != "" && (path == base || strings.HasPrefix(path, base+string(os.PathSeparator))) {
+			return true
+		}
+	}
+	return false
+}
 func (m *Manager) executionPath(path string) string {
 	if m.cfg.Executor == "orb" {
 		return "/mnt/mac" + path
 	}
 	return path
 }
-func (m *Manager) command(dir, profile string, args []string) (*exec.Cmd, error) {
+func (m *Manager) command(dir string, argv []string) (*exec.Cmd, error) {
 	if m.cfg.Executor == "local" {
-		return exec.Command(m.cfg.Binary, args...), nil
+		return exec.Command(argv[0], argv[1:]...), nil
 	}
 	// The wrapper records its child's PID and completion. Only fixed text is written; all
 	// operator/configuration data travels as positional arguments, never shell code.
@@ -187,9 +230,9 @@ func (m *Manager) command(dir, profile string, args []string) (*exec.Cmd, error)
 	if e := os.WriteFile(wrapper, []byte(script), 0600); e != nil {
 		return nil, e
 	}
-	prefix := []string{"-m", m.cfg.Machine, "-w", m.executionPath(m.cfg.Root), "/bin/sh", m.executionPath(wrapper), m.executionPath(filepath.Join(dir, "pid")), m.executionPath(filepath.Join(dir, "exit")), m.executionPath(m.cfg.Binary)}
-	for _, arg := range args {
-		if filepath.IsAbs(arg) {
+	prefix := []string{"-m", m.cfg.Machine, "-w", m.executionPath(m.cfg.Root), "/bin/sh", m.executionPath(wrapper), m.executionPath(filepath.Join(dir, "pid")), m.executionPath(filepath.Join(dir, "exit"))}
+	for _, arg := range argv {
+		if m.hostPath(arg) {
 			arg = m.executionPath(arg)
 		}
 		prefix = append(prefix, arg)
@@ -210,7 +253,7 @@ func (m *Manager) observe(rec *record, stdout, stderr *os.File) {
 				if _, markerErr := os.Stat(filepath.Join(rec.dir, "exit")); markerErr != nil {
 					m.mu.Lock()
 					rec.job.Status = "stop_failed"
-					rec.job.Error = "OrbStack transport ended without ARIES completion; process remains owned"
+					rec.job.Error = "OrbStack transport ended without " + m.runnerName() + " completion; process remains owned"
 					m.mu.Unlock()
 					// Keep the live Linux child owned until its wrapper records
 					// completion. Transport closure is not runtime termination.
@@ -240,7 +283,7 @@ func (m *Manager) observe(rec *record, stdout, stderr *os.File) {
 				rec.job.Status = "cancelled"
 			} else if code != 0 || (err != nil && m.cfg.Executor != "orb") {
 				rec.job.Status = "failed"
-				rec.job.Error = "ARIES process exited unsuccessfully; inspect private job logs"
+				rec.job.Error = m.runnerName() + " process exited unsuccessfully; inspect private job logs"
 			} else if rec.job.Status == "stopping" || rec.job.Status == "stop_failed" {
 				rec.job.Status = "cancelled"
 			} else {
@@ -275,6 +318,13 @@ func (m *Manager) attach(rec *record) {
 			continue
 		}
 		path := filepath.Join(rec.dir, "artifacts", entry.Name())
+		if m.cfg.Backend == BackendASB {
+			// The driver publishes a normalized profile; mount it once it exists.
+			path = filepath.Join(path, "profile.json")
+			if _, e := os.Stat(path); e != nil {
+				continue
+			}
+		}
 		m.mu.Lock()
 		already := rec.attached == path
 		m.mu.Unlock()
@@ -294,6 +344,12 @@ func (m *Manager) attach(rec *record) {
 }
 func (m *Manager) inspectResult(rec *record) {
 	rec.job.CleanupStatus = "unconfirmed"
+	if m.cfg.Backend == BackendASB {
+		if rec.job.Action == "run" {
+			asbResult(&rec.job, rec.dir)
+		}
+		return
+	}
 	entries, _ := os.ReadDir(filepath.Join(rec.dir, "artifacts"))
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -409,6 +465,6 @@ func (m *Manager) Close(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-timer.C:
-		return fmt.Errorf("cleanup timeout: ARIES process remains owned")
+		return fmt.Errorf("cleanup timeout: %s process remains owned", m.runnerName())
 	}
 }

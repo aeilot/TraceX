@@ -120,36 +120,37 @@
           </button></div>
         </div>
         <div id="notice" class="notice" role="status" hidden></div>
-        <section id="experiment-panel" class="experiment-panel t-panel-slide" data-open="false" aria-label="Run a real ARIES experiment" hidden>
-          <div class="experiment-panel-heading"><div><div class="eyebrow">REAL ARIES EXECUTION</div><h2>New experiment</h2><p>Choose a configured workload and follow its live profile.</p></div><button id="close-experiment" class="button subtle">Close</button></div>
+        <section id="experiment-panel" class="experiment-panel t-panel-slide" data-open="false" aria-label="Run a real experiment" hidden>
+          <div class="experiment-panel-heading"><div><div class="eyebrow">REAL EXPERIMENT EXECUTION</div><h2>New experiment</h2><p>Choose a configured workload and follow its live profile.</p></div><button id="close-experiment" class="button subtle">Close</button></div>
           <p id="experiment-target" class="experiment-target"></p>
           <p id="experiment-message" role="status"></p>
           <details id="experiment-config" class="runner-setup">
-            <summary>ARIES runner settings</summary>
-            <p>Find an existing ARIES checkout or enter its absolute path on the TraceX host.</p>
+            <summary>Runner settings</summary>
+            <p>Choose a benchmark, then find its existing checkout or enter its absolute path on the TraceX host.</p>
             <form id="runner-form">
               <div class="experiment-fields">
-                <label>ARIES directory<input id="runner-root" list="runner-roots" placeholder="/absolute/path/to/ARIES" required /><datalist id="runner-roots"></datalist></label>
+                <label>Benchmark<select id="runner-backend"><option value="aries">ARIES</option><option value="agentsysbench">AgentSysBench</option></select></label>
+                <label>Benchmark directory<input id="runner-root" list="runner-roots" placeholder="/absolute/path/to/ARIES" required /><datalist id="runner-roots"></datalist></label>
                 <label>Execution host<select id="runner-executor"><option value="local">Local Linux</option><option value="orb">OrbStack Linux machine</option></select></label>
                 <label id="runner-machine-field">OrbStack machine<input id="runner-machine" list="runner-machines" /><datalist id="runner-machines"></datalist></label>
-                <label>ARIES binary (optional)<input id="runner-binary" placeholder="bin/aries" /></label>
+                <label id="runner-binary-field">ARIES binary (optional)<input id="runner-binary" placeholder="bin/aries" /></label>
               </div>
               <div class="experiment-job-actions"><button id="runner-discover" type="button" class="button">Discover directories &amp; machines</button><button id="runner-save" type="submit" class="button">Save runner settings</button><button id="runner-check" type="button" class="button">Check execution host</button></div>
               <p id="runner-message" role="status"></p><ul id="runner-checks" aria-live="polite"></ul>
-              <p class="experiment-help">Save the target before checking it. Checks inspect Linux, the shared binary, Docker and named credential variables. Dataset and model endpoint readiness are not tested. Credential values stay on the execution host.</p>
+              <p id="runner-help" class="experiment-help">Save the target before checking it. Checks inspect Linux, the shared binary, Docker and named credential variables. Dataset and model endpoint readiness are not tested. Credential values stay on the execution host.</p>
             </form>
           </details>
           <form id="experiment-form" hidden>
-            <div class="experiment-fields"><label>Find a workload<input id="experiment-filter" type="search" placeholder="Workload, harness, model…" /></label><label>Profile preset<select id="experiment-profile"></select></label><label>Concurrency<input id="experiment-concurrency" type="number" min="1" step="1" value="1" required /></label></div>
+            <div class="experiment-fields"><label>Find a workload<input id="experiment-filter" type="search" placeholder="Workload, harness, model…" /></label><label>Profile preset<select id="experiment-profile"></select></label><label id="experiment-requests-field" hidden>Requests<input id="experiment-requests" type="number" min="1" step="1" value="1" /></label><label>Concurrency<input id="experiment-concurrency" type="number" min="1" step="1" value="1" required /></label></div>
             <p id="experiment-profile-details"></p>
             <details id="experiment-model-settings" class="runner-setup" hidden><summary>Model configuration</summary>
               <label class="experiment-ack"><input id="experiment-model-override" type="checkbox" /><span>Override this profile’s external model for this job</span></label>
               <div class="experiment-fields"><label>Model ID<input id="experiment-model-id" /></label><label>Model endpoint<input id="experiment-model-url" type="url" /></label><label>API key environment variable<input id="experiment-model-key-env" placeholder="DEEPSEEK_API_KEY" /></label><label>Reasoning effort<input id="experiment-model-reasoning" /></label></div>
               <p class="experiment-help">Overrides apply to the private job copy. The original ARIES profile is preserved. Configure the named credential on the execution host.</p>
             </details><p id="experiment-schedule" class="experiment-warning" hidden></p>
-            <fieldset class="experiment-tasks"><legend>Workload tasks <span id="experiment-task-count"></span></legend><div class="experiment-task-actions"><button id="experiment-select-all" class="button small" type="button">Select all</button><button id="experiment-clear" class="button subtle small" type="button">Clear</button></div><div id="experiment-task-list"></div></fieldset>
+            <fieldset id="experiment-tasks" class="experiment-tasks"><legend>Workload tasks <span id="experiment-task-count"></span></legend><div class="experiment-task-actions"><button id="experiment-select-all" class="button small" type="button">Select all</button><button id="experiment-clear" class="button subtle small" type="button">Clear</button></div><div id="experiment-task-list"></div></fieldset>
             <label class="experiment-ack"><input id="experiment-ack" type="checkbox" /><span id="experiment-ack-label">I acknowledge real model calls may incur provider charges.</span></label>
-            <div class="experiment-submit"><button id="experiment-prepare" class="button" type="button">Prepare data &amp; images</button><button id="experiment-start" class="button experiment-primary" type="submit">Start experiment</button></div><p class="experiment-help">Preparation runs ARIES setup without model calls. Runs use the credentials and endpoints in the selected profile.</p><p id="experiment-validation" role="status"></p>
+            <div class="experiment-submit"><button id="experiment-prepare" class="button" type="button">Prepare data &amp; images</button><button id="experiment-start" class="button experiment-primary" type="submit">Start experiment</button></div><p id="experiment-prepare-help" class="experiment-help">Preparation runs ARIES setup without model calls. Runs use the credentials and endpoints in the selected profile.</p><p id="experiment-validation" role="status"></p>
           </form>
           <div class="experiment-jobs-heading"><h3>Experiment jobs</h3><button id="experiment-reload" class="button subtle small">Refresh jobs</button></div><div id="experiment-jobs" aria-live="polite"></div>
         </section>

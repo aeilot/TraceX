@@ -51,6 +51,8 @@ Alternatively, configure the runner at startup:
 ./bin/tracex --aries-dir /Users/you/Developer/ARIES --aries-executor orb --aries-machine aries-vm
 ```
 
+AgentSysBench deployments run the same way: choose **AgentSysBench** in runner settings or start with `--asb-dir /path/to/agent-sys-bench`, then pick a setting, request count and concurrency; see [the adapter](adapters/agentsysbench/README.md).
+
 Select a workload and profile, choose declared tasks and concurrency, prepare prerequisites, then explicitly start the real benchmark. Runs attach automatically to the live DAG and timeline. The panel supports graceful stop and reports process, harness, evaluation and cleanup outcomes separately. Model execution requires acknowledgment; selecting a preset does not start it. See [experiment setup and limits](docs/experiments.md).
 
 ## Explore

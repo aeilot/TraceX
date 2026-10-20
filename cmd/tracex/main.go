@@ -41,14 +41,15 @@ func run(ctx context.Context, args []string, out, errOut io.Writer) (result erro
 	exportPath := flags.String("export", "", "write normalized JSON to this file and exit; use - for stdout")
 	runnerConfig := flags.String("runner-config", ".cache/tracex/runner.json", "saved UI runner settings; command-line ARIES options take precedence")
 	ariesDir := flags.String("aries-dir", "", "ARIES repository; explicitly enables experiment controls")
+	asbDir := flags.String("asb-dir", "", "AgentSysBench repository; enables AgentSysBench experiment controls instead of ARIES")
 	ariesBin := flags.String("aries-bin", "", "ARIES executable (default ARIES_DIR/bin/aries)")
-	executor := flags.String("aries-executor", "local", "ARIES execution host: local or orb")
+	executor := flags.String("aries-executor", "local", "execution host for --aries-dir or --asb-dir: local or orb")
 	machine := flags.String("aries-machine", "", "OrbStack machine (required for orb executor)")
-	jobsDir := flags.String("jobs-dir", "", "private experiment job directory (default ARIES_DIR/.cache/tracex/jobs)")
-	stopTimeout := flags.Duration("stop-timeout", 2*time.Minute, "grace period for ARIES shutdown; never force kills")
+	jobsDir := flags.String("jobs-dir", "", "private experiment job directory (default <benchmark dir>/.cache/tracex/jobs)")
+	stopTimeout := flags.Duration("stop-timeout", 2*time.Minute, "grace period for runner shutdown; never force kills")
 	flags.Usage = func() {
 		fmt.Fprintln(errOut, "Usage: tracex [--run PATH ...] [--runs-dir DIR] [--watch 1s] [--addr HOST:PORT] [--export PATH|-]")
-		fmt.Fprintln(errOut, "Visualize agent workloads; optionally prepare and run configured ARIES experiments.")
+		fmt.Fprintln(errOut, "Visualize agent workloads; optionally prepare and run ARIES or AgentSysBench experiments.")
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(args); err != nil {
@@ -60,11 +61,21 @@ func run(ctx context.Context, args []string, out, errOut io.Writer) (result erro
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected argument %q; use --run PATH", flags.Arg(0))
 	}
-	if *ariesDir != "" && *exportPath != "" {
-		return fmt.Errorf("--aries-dir cannot be combined with --export")
+	if *ariesDir != "" && *asbDir != "" {
+		return fmt.Errorf("choose one of --aries-dir and --asb-dir")
 	}
-	if *ariesDir == "" && (*ariesBin != "" || *machine != "" || *jobsDir != "" || *executor != "local") {
-		return fmt.Errorf("experiment options require --aries-dir")
+	runnerDir, backend := *ariesDir, experiment.BackendARIES
+	if *asbDir != "" {
+		runnerDir, backend = *asbDir, experiment.BackendASB
+	}
+	if runnerDir != "" && *exportPath != "" {
+		return fmt.Errorf("--aries-dir and --asb-dir cannot be combined with --export")
+	}
+	if runnerDir == "" && (*ariesBin != "" || *machine != "" || *jobsDir != "" || *executor != "local") {
+		return fmt.Errorf("experiment options require --aries-dir or --asb-dir")
+	}
+	if *asbDir != "" && *ariesBin != "" {
+		return fmt.Errorf("--aries-bin applies only to --aries-dir")
 	}
 	if *executor != "local" && *executor != "orb" {
 		return fmt.Errorf("--aries-executor must be local or orb")
@@ -136,26 +147,30 @@ func run(ctx context.Context, args []string, out, errOut io.Writer) (result erro
 	workspaceCtx, cancelWorkspace := context.WithCancel(ctx)
 	defer cancelWorkspace()
 	opts := server.Options{WatchInterval: *watch, RunnerConfigPath: *runnerConfig}
-	if *ariesDir == "" && *runnerConfig != "" {
+	if runnerDir == "" && *runnerConfig != "" {
 		if data, e := os.ReadFile(*runnerConfig); e == nil {
 			var saved experiment.Settings
 			if e = json.Unmarshal(data, &saved); e == nil {
-				info, statErr := os.Stat(filepath.Join(saved.Root, "profiles"))
+				marker := "profiles"
+				if saved.Backend == experiment.BackendASB {
+					marker = filepath.Join("benchmark", "deployment")
+				}
+				info, statErr := os.Stat(filepath.Join(saved.Root, marker))
 				if filepath.IsAbs(saved.Root) && statErr == nil && info.IsDir() && (saved.Executor == "local" || saved.Executor == "orb") {
-					opts.Experiment = &experiment.Config{Root: saved.Root, Binary: saved.Binary, Executor: saved.Executor, Machine: saved.Machine, StopTimeout: *stopTimeout}
+					opts.Experiment = &experiment.Config{Backend: saved.Backend, Root: saved.Root, Binary: saved.Binary, Executor: saved.Executor, Machine: saved.Machine, StopTimeout: *stopTimeout}
 				} else {
-					fmt.Fprintln(errOut, "Saved runner directory is unavailable; configure ARIES in New experiment.")
+					fmt.Fprintln(errOut, "Saved runner directory is unavailable; configure the runner in New experiment.")
 				}
 			} else {
-				fmt.Fprintln(errOut, "Saved runner settings are invalid; configure ARIES in New experiment.")
+				fmt.Fprintln(errOut, "Saved runner settings are invalid; configure the runner in New experiment.")
 			}
 		} else if !errors.Is(e, os.ErrNotExist) {
 			return fmt.Errorf("read runner settings: %w", e)
 		}
 	}
 	opts.Insight = &server.InsightConfig{Endpoint: os.Getenv("TRACEX_INSIGHT_ENDPOINT"), Model: os.Getenv("TRACEX_INSIGHT_MODEL"), APIKey: os.Getenv("TRACEX_INSIGHT_API_KEY")}
-	if *ariesDir != "" {
-		opts.Experiment = &experiment.Config{Root: *ariesDir, Binary: *ariesBin, Executor: *executor, Machine: *machine, JobsDir: *jobsDir, StopTimeout: *stopTimeout}
+	if runnerDir != "" {
+		opts.Experiment = &experiment.Config{Backend: backend, Root: runnerDir, Binary: *ariesBin, Executor: *executor, Machine: *machine, JobsDir: *jobsDir, StopTimeout: *stopTimeout}
 		if opts.WatchInterval == 0 {
 			opts.WatchInterval = time.Second
 		}

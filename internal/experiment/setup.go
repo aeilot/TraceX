@@ -17,6 +17,7 @@ import (
 
 // Settings contains operator-selected paths, never provider credentials.
 type Settings struct {
+	Backend  string `json:"backend,omitempty"`
 	Root     string `json:"root"`
 	Binary   string `json:"binary"`
 	Executor string `json:"executor"`
@@ -38,7 +39,7 @@ func validModel(s ModelSettings) bool {
 func (m *Manager) Settings() Settings {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return Settings{m.cfg.Root, m.cfg.Binary, m.cfg.Executor, m.cfg.Machine}
+	return Settings{m.cfg.Backend, m.cfg.Root, m.cfg.Binary, m.cfg.Executor, m.cfg.Machine}
 }
 
 // Configure serializes with Start. Running jobs retain their execution target and ownership.
@@ -52,18 +53,18 @@ func (m *Manager) Configure(s Settings, savePath string) error {
 		return ErrBusy
 	}
 	if !filepath.IsAbs(s.Root) || (s.Executor != "local" && s.Executor != "orb") || (s.Executor == "orb" && (s.Machine == "" || strings.HasPrefix(s.Machine, "-"))) || (s.Executor == "local" && s.Machine != "") {
-		return fmt.Errorf("%w: choose an absolute ARIES directory and an execution target", ErrInvalid)
+		return fmt.Errorf("%w: choose an absolute benchmark directory and an execution target", ErrInvalid)
 	}
 	jobsDir := ""
 	if root, err := filepath.EvalSymlinks(s.Root); err == nil && root == m.cfg.Root {
 		jobsDir = m.cfg.JobsDir
 	}
-	next, err := configured(Config{JobsDir: jobsDir, Root: s.Root, Binary: s.Binary, Executor: s.Executor, Machine: s.Machine, StopTimeout: m.cfg.StopTimeout, OnArtifacts: m.cfg.OnArtifacts})
+	next, err := configured(Config{Backend: s.Backend, JobsDir: jobsDir, Root: s.Root, Binary: s.Binary, Executor: s.Executor, Machine: s.Machine, StopTimeout: m.cfg.StopTimeout, OnArtifacts: m.cfg.OnArtifacts})
 	if err != nil {
-		return fmt.Errorf("%w: ARIES directory must contain readable profiles", ErrInvalid)
+		return fmt.Errorf("%w: directory must be an ARIES checkout with profiles or an AgentSysBench checkout", ErrInvalid)
 	}
 	if savePath != "" {
-		s = Settings{next.cfg.Root, next.cfg.Binary, next.cfg.Executor, next.cfg.Machine}
+		s = Settings{next.cfg.Backend, next.cfg.Root, next.cfg.Binary, next.cfg.Executor, next.cfg.Machine}
 		b, _ := json.MarshalIndent(s, "", "  ")
 		if err = os.MkdirAll(filepath.Dir(savePath), 0700); err != nil {
 			return fmt.Errorf("cannot save runner settings")
@@ -96,12 +97,24 @@ type Discovery struct {
 }
 
 // Discover searches only conventional nearby locations; it never walks the user's disk.
-func Discover(ctx context.Context, current string) Discovery {
+func Discover(ctx context.Context, current, backend string) Discovery {
 	d := Discovery{Roots: []string{}, Machines: []string{}, Platform: runtime.GOOS}
 	cwd, _ := os.Getwd()
 	home, _ := os.UserHomeDir()
 	seen := map[string]bool{}
-	for _, p := range []string{current, os.Getenv("ARIES_DIR"), filepath.Join(cwd, "ARIES"), filepath.Join(filepath.Dir(cwd), "ARIES"), filepath.Join(home, "Developer", "ARIES"), filepath.Join(home, "Developer", "research", "ARIES")} {
+	candidates := []string{current, os.Getenv("ARIES_DIR"), filepath.Join(cwd, "ARIES"), filepath.Join(filepath.Dir(cwd), "ARIES"), filepath.Join(home, "Developer", "ARIES"), filepath.Join(home, "Developer", "research", "ARIES")}
+	valid := func(p string) bool {
+		info, err := os.Stat(filepath.Join(p, "profiles"))
+		return err == nil && info.IsDir()
+	}
+	if backend == BackendASB {
+		candidates = []string{current, os.Getenv("AGSBENCH_HOME"), os.Getenv("ASB_DIR")}
+		for _, base := range []string{cwd, filepath.Dir(cwd), filepath.Join(home, "Developer"), filepath.Join(home, "Developer", "research"), filepath.Join(home, "Developer", "research", "external")} {
+			candidates = append(candidates, filepath.Join(base, "agent-sys-bench"))
+		}
+		valid = isASBRoot
+	}
+	for _, p := range candidates {
 		if p == "" {
 			continue
 		}
@@ -113,8 +126,7 @@ func Discover(ctx context.Context, current string) Discovery {
 		if err != nil || seen[p] {
 			continue
 		}
-		info, err := os.Stat(filepath.Join(p, "profiles"))
-		if err == nil && info.IsDir() {
+		if valid(p) {
 			d.Roots = append(d.Roots, p)
 			seen[p] = true
 		}
@@ -153,8 +165,11 @@ func (m *Manager) Check(ctx context.Context) []Check {
 	cfg, catalog := m.cfg, m.catalog
 	m.mu.Unlock()
 	checks := []Check{{"binary", catalog.Ready, catalog.Message}}
+	if cfg.Backend == BackendASB {
+		checks = []Check{{"runner", catalog.Ready, catalog.Message}}
+	}
 	if !catalog.Enabled {
-		return []Check{{"runner", false, "Save an ARIES directory and execution target first."}}
+		return []Check{{"runner", false, "Save a benchmark directory and execution target first."}}
 	}
 	probe := func(name string, args ...string) {
 		checkCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
@@ -176,6 +191,16 @@ func (m *Manager) Check(ctx context.Context) []Check {
 		checks = append(checks, Check{name, err == nil, message})
 	}
 	probe("linux", "/bin/sh", "-c", `test "$(uname -s)" = Linux`)
+	if cfg.Backend == BackendASB {
+		// The driver needs Docker Compose v2 and a stdlib Python for the cgroup
+		// sampler; conversion runs inside the AgentSysBench loadgen image.
+		probe("docker", "docker", "info", "--format", "{{.ServerVersion}}")
+		probe("docker compose", "docker", "compose", "version")
+		probe("python3", "python3", "-c", "import json, signal, subprocess")
+		probe("ASB setup (.env)", "test", "-f", ".env")
+		probe("loadgen image agsbench-request:v1", "docker", "image", "inspect", "agsbench-request:v1")
+		return checks
+	}
 	binary := cfg.Binary
 	if cfg.Executor == "orb" {
 		binary = "/mnt/mac" + binary

@@ -29,8 +29,14 @@ func New(ctx context.Context, c Config) (*Manager, error) {
 }
 
 func configured(c Config) (*Manager, error) {
+	if c.Backend == "" {
+		c.Backend = BackendARIES
+	}
+	if c.Backend != BackendARIES && c.Backend != BackendASB {
+		return nil, fmt.Errorf("%w: unknown backend", ErrInvalid)
+	}
 	m := &Manager{cfg: c}
-	m.catalog = Catalog{Profiles: []Preset{}, Executor: c.Executor, Machine: c.Machine}
+	m.catalog = Catalog{Backend: c.Backend, Profiles: []Preset{}, Executor: c.Executor, Machine: c.Machine}
 	if c.Root == "" {
 		return m, nil
 	}
@@ -43,12 +49,17 @@ func configured(c Config) (*Manager, error) {
 		return nil, e
 	}
 	m.cfg.Root = root
+	if c.Backend == BackendASB && !isASBRoot(root) {
+		return nil, fmt.Errorf("%w: AgentSysBench directory must contain benchmark/deployment", ErrInvalid)
+	}
 	if c.Executor == "" {
 		m.cfg.Executor = "local"
 	}
 	m.catalog.Executor = m.cfg.Executor
 	m.catalog.Enabled = true
-	if c.Binary == "" {
+	if c.Backend == BackendASB {
+		m.cfg.Binary = ""
+	} else if c.Binary == "" {
 		m.cfg.Binary = filepath.Join(root, "bin", "aries")
 	} else if !filepath.IsAbs(c.Binary) {
 		m.cfg.Binary = filepath.Join(root, c.Binary)
@@ -69,27 +80,13 @@ func configured(c Config) (*Manager, error) {
 		return nil, e
 	}
 	m.catalog.Ready = true
-	binaryFile, openErr := os.Open(m.cfg.Binary)
-	b := make([]byte, 4)
-	e = openErr
-	if openErr == nil {
-		_, e = io.ReadFull(binaryFile, b)
-		binaryFile.Close()
-	}
-	if e != nil {
-		m.catalog.Ready = false
-		m.catalog.Message = "ARIES binary is missing or unreadable"
-	} else if m.cfg.Executor == "local" && runtime.GOOS == "darwin" && string(b[:4]) == "\x7fELF" {
-		m.catalog.Ready = false
-		m.catalog.Message = "Linux ARIES binary requires an explicitly configured OrbStack machine"
-	}
-	if info, err := os.Stat(m.cfg.Binary); err == nil && info.Mode().Perm()&0111 == 0 {
-		m.catalog.Ready = false
-		m.catalog.Message = "ARIES binary is not executable"
-	}
-	if m.cfg.Executor == "local" && runtime.GOOS == "linux" && (string(b) == "\xcf\xfa\xed\xfe" || string(b) == "\xfe\xed\xfa\xcf" || string(b) == "\xca\xfe\xba\xbe") {
-		m.catalog.Ready = false
-		m.catalog.Message = "macOS ARIES binary cannot run on this Linux host"
+	if c.Backend == BackendASB {
+		if m.cfg.Executor == "local" && runtime.GOOS != "linux" {
+			m.catalog.Ready = false
+			m.catalog.Message = "AgentSysBench runs Docker deployments on Linux; choose an OrbStack machine"
+		}
+	} else {
+		m.checkBinary()
 	}
 	if m.cfg.Executor == "orb" {
 		if c.Machine == "" {
@@ -102,6 +99,10 @@ func configured(c Config) (*Manager, error) {
 		}
 	} else if m.cfg.Executor != "local" {
 		return nil, fmt.Errorf("%w: unknown executor", ErrInvalid)
+	}
+	if c.Backend == BackendASB {
+		m.catalog.Profiles = asbCatalog(root)
+		return m, nil
 	}
 	base := filepath.Join(root, "profiles")
 	e = filepath.WalkDir(base, func(path string, d fs.DirEntry, walkErr error) error {
@@ -129,6 +130,32 @@ func configured(c Config) (*Manager, error) {
 		return nil, e
 	}
 	return m, nil
+}
+
+// checkBinary marks an ARIES runner unready when its binary cannot run on the target.
+func (m *Manager) checkBinary() {
+	binaryFile, openErr := os.Open(m.cfg.Binary)
+	b := make([]byte, 4)
+	e := openErr
+	if openErr == nil {
+		_, e = io.ReadFull(binaryFile, b)
+		binaryFile.Close()
+	}
+	if e != nil {
+		m.catalog.Ready = false
+		m.catalog.Message = "ARIES binary is missing or unreadable"
+	} else if m.cfg.Executor == "local" && runtime.GOOS == "darwin" && string(b[:4]) == "\x7fELF" {
+		m.catalog.Ready = false
+		m.catalog.Message = "Linux ARIES binary requires an explicitly configured OrbStack machine"
+	}
+	if info, err := os.Stat(m.cfg.Binary); err == nil && info.Mode().Perm()&0111 == 0 {
+		m.catalog.Ready = false
+		m.catalog.Message = "ARIES binary is not executable"
+	}
+	if m.cfg.Executor == "local" && runtime.GOOS == "linux" && (string(b) == "\xcf\xfa\xed\xfe" || string(b) == "\xfe\xed\xfa\xcf" || string(b) == "\xca\xfe\xba\xbe") {
+		m.catalog.Ready = false
+		m.catalog.Message = "macOS ARIES binary cannot run on this Linux host"
+	}
 }
 func readProfile(path string) (map[string]any, error) {
 	s, e := os.Lstat(path)

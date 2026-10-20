@@ -59,12 +59,18 @@ func (ws *workspace) experiments(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if r.URL.Path == "/api/experiments/discover" {
-			ws.reply(w, r, experiment.Discover(r.Context(), ws.experiment.Settings().Root))
+			backend := r.URL.Query().Get("backend")
+			current := ws.experiment.Settings()
+			root := current.Root
+			if backend != current.Backend && !(backend == "" && current.Backend == experiment.BackendARIES) {
+				root = "" // a saved directory of the other backend is not a candidate
+			}
+			ws.reply(w, r, experiment.Discover(r.Context(), root, backend))
 			return
 		}
 		if r.URL.Path == "/api/experiments/catalog" {
 			if ws.experiment == nil {
-				ws.reply(w, r, experiment.Catalog{Message: "Experiment controls disabled. Restart TraceX with --aries-dir to enable ARIES execution.", Profiles: []experiment.Preset{}})
+				ws.reply(w, r, experiment.Catalog{Message: "Experiment controls disabled. Restart TraceX with --aries-dir or --asb-dir to enable execution.", Profiles: []experiment.Preset{}})
 			} else {
 				ws.reply(w, r, ws.experiment.Catalog())
 			}
@@ -121,7 +127,7 @@ func (ws *workspace) experiments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if ws.experiment == nil || (!setup && !ws.experiment.Catalog().Enabled) {
-		ws.fail(w, r, 409, "experiment controls are disabled; configure the ARIES runner")
+		ws.fail(w, r, 409, "experiment controls are disabled; configure the experiment runner")
 		return
 	}
 	if r.URL.Path == "/api/experiments/check" {
@@ -151,7 +157,7 @@ func (ws *workspace) experiments(w http.ResponseWriter, r *http.Request) {
 		}
 		if errors.Is(err, experiment.ErrInvalid) {
 			code = 400
-			message = "Select a valid ARIES directory with profiles and a local or OrbStack target"
+			message = "Select a valid ARIES or AgentSysBench directory and a local or OrbStack target"
 		}
 		ws.fail(w, r, code, message)
 		return

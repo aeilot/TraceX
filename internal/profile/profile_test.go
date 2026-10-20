@@ -254,7 +254,7 @@ func TestProducerNamespaceAndUsageDetailSurviveValidation(t *testing.T) {
 	f := func(v float64) *float64 { return &v }
 	p := Profile{SchemaVersion: 2, RunID: "asb", DurationMS: 10,
 		Configuration: map[string]any{"asb.setting": "browser-use-webagent", "secret": "x"},
-		Tasks: []Task{{ID: "t", DurationMS: 10, Attributes: map[string]any{"asb.n_steps": 3.0, "asb.error": "boom", "prompt": "hidden", "asb.": "empty"}}},
+		Tasks:         []Task{{ID: "t", DurationMS: 10, Attributes: map[string]any{"asb.n_steps": 3.0, "asb.error": "boom", "prompt": "hidden", "asb.": "empty"}}},
 		Spans: []Span{{ID: "s", TaskID: "t", DurationMS: 5, Kind: "model",
 			Attributes: map[string]any{"asb.category": "LLM", "asb.list": []any{1}, "url": "http://x"},
 			Usage:      &Usage{InputTokens: f(10), CacheReadTokens: f(4), ReasoningTokens: f(2), CostUSD: f(0.01)}}},
