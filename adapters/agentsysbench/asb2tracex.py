@@ -24,12 +24,12 @@ asb.<key>_truncated flag. With --archive, the four unified tables, diagnostics,
 preds and the raw Prometheus series are written verbatim, so the archive plus
 the raw benchmark/data directory is the lossless record.
 
-Usage:
-  uv run --with pandas --with numpy python -I asb2tracex.py \\
-      --asb-home ~/Developer/research/external/agent-sys-bench \\
-      --setting browser-use-webagent --data .../benchmark/data/browser-use-webagent \\
-      --prometheus http://aries-vm.orb.local:9090 --config request_num=1 \\
-      --archive runs/X/asb -o runs/X/profile.json
+Usage (needs pandas and numpy):
+  python3 -I asb2tracex.py --asb-home /path/to/agent-sys-bench \\
+      --setting browser-use-webagent \\
+      --data /path/to/agent-sys-bench/benchmark/data/browser-use-webagent \\
+      --cgroup-samples samples.jsonl --config request_num=8 \\
+      --archive out/asb -o out/profile.json
   # or, from exported tables (no raw data):
   ... --tables benchmark/analysis/examples/qa-rag/tables --setting qa-rag
 """

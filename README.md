@@ -1,6 +1,6 @@
 # TraceX
 
-An agent workload profiler for [ARIES](https://github.com/hyscale-lab/ARIES) and backends that emit the TraceX event contract. Explore explicit execution DAGs, a linear timeline, resource signals, critical paths, and experiment comparisons. TraceX is an independent profiler; BrowserBench remains an ARIES workload extension.
+An agent workload profiler for [ARIES](https://github.com/hyscale-lab/ARIES), [AgentSysBench](https://github.com/open-agent-infra/agent-sys-bench) and any backend that emits the TraceX event contract. Explore explicit execution DAGs, a linear timeline, resource signals, critical paths, and experiment comparisons, and launch real ARIES or AgentSysBench experiments from the same workspace. TraceX is an independent profiler; BrowserBench remains an ARIES workload extension.
 
 The default workspace contains **two synthetic experiments**. Their timing, dependencies, usage, and resource signals are authored examples, not benchmark results.
 
@@ -18,7 +18,7 @@ make run
 
 Open [http://127.0.0.1:4318](http://127.0.0.1:4318).
 
-Load ARIES runs, normalized JSON, or event streams:
+Load ARIES runs, normalized JSON (including converted AgentSysBench runs), or event streams:
 
 ```sh
 go run ./cmd/tracex --run /path/to/aries/runs/RUN_ID
@@ -26,6 +26,16 @@ go run ./cmd/tracex --run baseline.json --run candidate.json
 go run ./cmd/tracex --runs-dir /path/to/aries/runs --watch 1s
 go run ./cmd/tracex --run events.jsonl --watch 250ms
 go run ./cmd/tracex --run profile.json --watch 0 --addr 127.0.0.1:4319
+```
+
+An AgentSysBench run that was not launched from TraceX can be converted with the bundled adapter, which needs Python with pandas (ASB's `agsbench-request:v1` image has it):
+
+```sh
+python3 adapters/agentsysbench/asb2tracex.py --asb-home /path/to/agent-sys-bench \
+  --setting browser-use-webagent \
+  --data /path/to/agent-sys-bench/benchmark/data/browser-use-webagent \
+  --archive out/asb -o out/profile.json
+go run ./cmd/tracex --run out/profile.json
 ```
 
 `--run` is repeatable. `--runs-dir` discovers immediate directories and `.json` files at startup; new directories require restarting discovery. Mounted sources update automatically; `--watch 0` disables watching. The browser can pause/resume updates without stopping the source. Binding defaults to loopback; changing the address changes who can access your local data. Stop with Ctrl-C.
@@ -41,32 +51,35 @@ make build
 
 ## Run real experiments
 
-Start with `make run`, open **New experiment → ARIES runner settings**, discover or enter your ARIES directory, select the execution host, and save. The panel can inspect host prerequisites and override external-model settings for each job. Runner settings persist locally across restarts. ARIES must already be checked out and built on the execution host.
+TraceX can start real benchmark runs and attach them to the live DAG, timeline and resource views. One runner is configured at a time. Start with `make run`, open **New experiment → Runner settings**, choose the benchmark (**ARIES** or **AgentSysBench**), discover or enter its checkout, select the execution host (local Linux, or an OrbStack Linux machine on macOS), and save. **Check execution host** reports each prerequisite separately. Runner settings persist locally across restarts.
 
-Alternatively, configure the runner at startup:
+Or configure the runner at startup; `--aries-executor` and `--aries-machine` apply to either benchmark:
 
 ```sh
 ./bin/tracex --aries-dir /absolute/path/to/ARIES
+./bin/tracex --asb-dir /absolute/path/to/agent-sys-bench
 # macOS, using an existing Linux OrbStack machine:
 ./bin/tracex --aries-dir /Users/you/Developer/ARIES --aries-executor orb --aries-machine aries-vm
 ```
 
-AgentSysBench deployments run the same way: choose **AgentSysBench** in runner settings or start with `--asb-dir /path/to/agent-sys-bench`, then pick a setting, request count and concurrency; see [the adapter](adapters/agentsysbench/README.md).
+Every launch is explicit: selecting a preset starts nothing, preparation makes no model calls, and a run requires acknowledging model calls each time. The panel supports graceful stop and reports process, harness, evaluation and cleanup outcomes separately. See [experiment setup and limits](docs/experiments.md).
 
-Select a workload and profile, choose declared tasks and concurrency, prepare prerequisites, then explicitly start the real benchmark. Runs attach automatically to the live DAG and timeline. The panel supports graceful stop and reports process, harness, evaluation and cleanup outcomes separately. Model execution requires acknowledgment; selecting a preset does not start it. See [experiment setup and limits](docs/experiments.md).
+**ARIES.** Presets are the profiles under `ARIES_DIR/profiles`. Choose declared tasks and concurrency; arrival profiles keep their full sequence. **Prepare** runs `aries setup`; **Run** runs `aries PROFILE.json` on a private copy with your selection and optional external-model overrides. ARIES must already be built on the execution host.
+
+**AgentSysBench.** Presets are the ten deployments under `benchmark/deployment/`. Choose a request count (the loadgen sends the first *N* manifest requests) and, where the deployment allows it, a concurrency; settings that need GPUs, KVM or x86_64 say so. **Prepare** builds the loadgen and agent images and prepares the data. **Run** samples every container's cgroup counters, starts the deployment, converts it into a live profile every 10 seconds, then runs the deployment's cleanup and evaluation and archives the source tables and data next to the profile. **Stop** runs the deployment's cleanup before exiting. The execution host needs Docker, Compose v2 and a stdlib `python3`; models and keys come from ASB's `scripts/configure-api.sh` on that host. See the [adapter](adapters/agentsysbench/README.md) for the field mapping and outputs.
 
 ## Explore
 
 - **Experiment workspace:** search mounted and imported runs by name or configuration, filter source state, and select two runs for comparison. Open a run into Overview, Profiler, Insights, Tasks, Configuration, or Evidence. The Tasks table supports search, status filtering and duration/score sorting with direct navigation to the selected task's execution.
 - **Restore an investigation:** copy the view link to retain the source run identity, task/span, filters, time window, timeline view window and visualization. The same source must be mounted; browser imports must be reimported after a reload. Sources & runner shows source errors and execution-target readiness. See [workspace behavior and verification](docs/frontend-workspace.md).
 - **Agent DAG / timeline / split view:** explicit parent, spawn, call, return, dependency, and multi-parent join relationships. Cyclic graphs are rejected.
-- **Analysis:** per-kind interval unions and summed work, task P50/P95, throughput, effective work concurrency, input/output tokens with known-usage coverage, and unobserved task time.
+- **Analysis:** per-kind interval unions and summed work, task P50/P95, throughput, effective work concurrency, input/output tokens with known-usage coverage (plus reasoning, cache read/write tokens and cost when recorded), and unobserved task time.
 - **Recorded critical path:** longest sum of completed span durations on explicit finish-before-start dependency/join/return edges. Parent containment and unrecorded waits are excluded. Missing or contradictory precedence remains unavailable.
 - **Timeline:** every span of the time window, not a page: spans too small to tell apart at the current zoom merge into clusters, and clicking one zooms into it. Drag to pan, ⌘/Ctrl + scroll (or pinch) to zoom about the pointer down to a 1 ms view, and horizontal scroll to pan; lanes show at most 12 rows, with more concurrent spans in a marked overflow row. The DAG draws the first 500 spans of the window.
 - **Linked time window:** enter a range or Shift-drag empty timeline space. Spans and CPU/memory/GPU signals share the window. Span details show concurrent resource sample statistics, with runtime/task/shared context labels rather than causal cost claims.
 - **Comparison:** choose baseline and candidate runs, inspect configuration differences, latency, throughput, tokens, and evidence coverage. Imported JSON profiles can be compared with mounted sources.
 - **Scheduling:** one analysis window shared by concurrency curves (admitted, queued, in a model call, in a tool call, paused), occurrence lanes (lifecycle phases with unknown gaps; model, tool and pause work), task-owned versus shared runtime resources, and an interval impact table with evidence links and same-task slowdown. Computed from the whole run by `/api/scheduling`, not from a DAG page. See [scheduling analysis plan](docs/scheduling-analysis-plan.md) (P0 implemented).
-- **Insights:** evidence-linked diagnostics, model/tool aggregates, task-paired regressions, optional explicitly requested LLM interpretation, and a browser-local investigation notebook. See [configuration and metric definitions](docs/insights.md).
+- **Insights:** evidence-linked diagnostics whose buttons name their target task or span, model/tool aggregates, task-paired regressions, optional explicitly requested LLM interpretation, and a browser-local investigation notebook. See [configuration and metric definitions](docs/insights.md).
 - **Configuration sweep:** select several runs and plot task duration P50/P90, model-call P50, browser-tool local work P50/P90 and sandbox throttled-period share against one recorded configuration field (e.g. `concurrency`, `sandbox_cpu_limit`). Optional steady window and indexing to a baseline run. See [experiments](docs/experiments.md#configuration-sweep).
 - **Large runs:** server-side filtering, timeline layout per view window and plot width (`/api/timeline`), stable time ordering, overlap indexes, span lookup, and per-runtime resource envelopes that retain observed extrema and missing-value boundaries. Every matching span is drawn or counted in a cluster.
 - **Language:** English and Simplified Chinese. The interface follows the browser language; the header switch overrides it and is remembered per browser.
@@ -80,7 +93,7 @@ Select a workload and profile, choose declared tasks and concurrency, prepare pr
 | Hermes | Retained OpenTelemetry spans, explicit parents, selected model usage and identity metadata |
 | OpenClaw | Native sessions, explicitly matched tool-call intervals, model completion usage, and bridge evidence |
 | BrowserBench | Browser request/page intervals; URL, body, and query content omitted |
-| [AgentSysBench](https://github.com/open-agent-infra/agent-sys-bench) | Normalized JSON from an external adapter: fast-service call trees, per-call token usage (including cache and reasoning tokens and cost), IO sizes, rewards, and container resources; every source field kept under `asb.` metadata |
+| [AgentSysBench](https://github.com/open-agent-infra/agent-sys-bench) | Normalized JSON from the bundled [adapter](adapters/agentsysbench/README.md): fast-service call trees, per-call token usage (including cache and reasoning tokens and cost), IO sizes, rewards, and container resources; every source field kept under `asb.` metadata |
 | Other backends | Versioned normalized JSON or append-only events |
 
 Older runs cannot recover measurements they never recorded. In particular, a model completion with no start time is displayed as a marker with unavailable duration. Existing ARIES runs show task intervals, while full phase boundaries require the [ARIES instrumentation integration](docs/aries-integration.md). Cross-process clock synchronization is not verified. BrowserBench sandbox timing retains its source-integrity warning.
@@ -107,7 +120,20 @@ The producer has a finite demonstration sequence. Restart it by truncating the s
 
 ## Local data
 
-The service exposes normalized summaries and bundled assets. It does not serve run directories or raw logs, execute evidence, or upload runs. After configuring a runner in the UI or with `--aries-dir`, explicitly submitted experiment actions start ARIES, which can call models. Without a runner or optional Insights model configuration, the service only inspects evidence. A configured Insights provider receives only the previewed summary after explicit submission. Prompts, tool arguments, outputs, raw errors, and credentials are excluded by the adapters. Names, IDs, selected metadata, and comparison conditions can still be sensitive; review exports before sharing. Browser imports stay local. Private runs and exports belong outside Git.
+The service exposes normalized summaries and bundled assets. It does not serve run directories or raw logs, execute evidence, or upload runs. After configuring a runner in the UI or with `--aries-dir`/`--asb-dir`, explicitly submitted experiment actions start ARIES or an AgentSysBench deployment, which can call models. Without a runner or optional Insights model configuration, the service only inspects evidence. A configured Insights provider receives only the previewed summary after explicit submission. Prompts, tool arguments, outputs, raw errors, and credentials are excluded by the adapters. The AgentSysBench adapter is the exception for errors: it keeps ASB's per-request `error` field (truncated to 256 characters) as `asb.error`. Run artifacts on disk (ARIES output directories, AgentSysBench job archives) still hold raw trajectories and logs; TraceX never serves them. Names, IDs, selected metadata, and comparison conditions can still be sensitive; review exports before sharing. Browser imports stay local. Private runs and exports belong outside Git.
+
+## Repository layout
+
+| Path | Contents |
+| --- | --- |
+| `cmd/tracex` | CLI and server entry point |
+| `internal/profile` | Schema, loaders, analysis, timeline and scheduling projections |
+| `internal/server` | HTTP API, live source watching, experiment endpoints |
+| `internal/experiment` | Runner: ARIES and AgentSysBench job ownership, catalogs, host checks |
+| `adapters/agentsysbench` | ASB converter, cgroup sampler, lossless checker and job driver (embedded in the binary) |
+| `web` | Embedded UI and its JavaScript tests |
+| `examples` | Synthetic event fixture and live producer |
+| `docs` | Inputs, schema, events, experiments, insights, architecture, verification |
 
 ## Develop
 
@@ -115,4 +141,4 @@ The service exposes normalized summaries and bundled assets. It does not serve r
 make check
 ```
 
-Node.js 22 or later is needed only for browser-model tests. Checks cover Go tests, JavaScript syntax/model tests, the race detector, vet, and a binary build. See [verification evidence](docs/verification.md) for browser, native-data, streaming, and scale checks.
+Node.js 22 or later is needed only for browser-model tests. Checks cover Go tests (including the AgentSysBench driver against a fake Docker CLI), JavaScript syntax/model tests, the race detector, vet, and a binary build. The ASB adapter's lossless check runs separately with `check_lossless.py`; see its README. See [verification evidence](docs/verification.md) for browser, native-data, streaming, and scale checks.
