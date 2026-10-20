@@ -941,6 +941,8 @@ select {
   line-height: 1.6;
 }
 .detail-row dt {
+  min-width: 0;
+  overflow-wrap: anywhere;
   color: #91a082;
 }
 .detail-row dd {

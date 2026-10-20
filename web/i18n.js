@@ -694,6 +694,11 @@
     "Sample statistics describe concurrent runtime or task context, not resource cost caused by this span. Shared/device samples remain separate.":
       "采样统计描述的是同一时间的运行时或任务环境，而不是这个 span 造成的资源开销。共享和设备级采样单独列出。",
     "Recorded metadata": "记录的元数据",
+    "Task metadata": "任务元数据",
+    "Cache read tokens": "缓存读取 token",
+    "Cache write tokens": "缓存写入 token",
+    "Reasoning tokens": "推理 token",
+    "Cost (USD)": "费用（美元）",
     "Focus this time interval": "聚焦这段时间",
 
     // Notifications

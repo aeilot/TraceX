@@ -1984,6 +1984,14 @@ async function selectSpan(id) {
       ? [
           [t9n("Input tokens"), s.usage.input_tokens ?? t9n("Unavailable")],
           [t9n("Output tokens"), s.usage.output_tokens ?? t9n("Unavailable")],
+          ...[
+            ["cache_read_tokens", "Cache read tokens"],
+            ["cache_write_tokens", "Cache write tokens"],
+            ["reasoning_tokens", "Reasoning tokens"],
+            ["cost_usd", "Cost (USD)"],
+          ]
+            .filter(([k]) => s.usage[k] != null)
+            .map(([k, label]) => [t9n(label), s.usage[k]]),
         ]
       : []),
   ]) {
@@ -2087,6 +2095,16 @@ async function selectSpan(id) {
     const details = html("details", "detail-attributes");
     details.append(html("summary", "", t9n("Recorded metadata")));
     for (const [a, b] of Object.entries(s.attributes)) {
+      const row = html("div", "detail-row");
+      row.append(html("dt", "", a), html("dd", "", String(b)));
+      details.append(row);
+    }
+    content.append(details);
+  }
+  if (task?.attributes && Object.keys(task.attributes).length) {
+    const details = html("details", "detail-attributes");
+    details.append(html("summary", "", t9n("Task metadata")));
+    for (const [a, b] of Object.entries(task.attributes)) {
       const row = html("div", "detail-row");
       row.append(html("dt", "", a), html("dd", "", String(b)));
       details.append(row);

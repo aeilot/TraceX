@@ -20,6 +20,19 @@
     "provider",
     "bridge_role",
   ]);
+  // Producer-namespaced scalar metadata, matching producerNamespaces in Go.
+  const producerNamespaces = ["asb."];
+  const producerKey = (k) =>
+    k.length <= 128 &&
+    producerNamespaces.some((p) => k.startsWith(p) && k.length > p.length);
+  const usageKeys = [
+    "input_tokens",
+    "output_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+    "reasoning_tokens",
+    "cost_usd",
+  ];
   const taskFlags = new Set(["duration_outlier", "sparse_monitor"]);
   const networkKeys = new Set([
     "requests",
@@ -86,12 +99,12 @@
     }
     return sum;
   }
-  function scalars(value, keys) {
+  function scalars(value, keys, namespaced = false) {
     const out = {};
     if (!value || typeof value !== "object") return out;
     for (const [k, v] of Object.entries(value))
       if (
-        keys.has(k) &&
+        (keys.has(k) || (namespaced && producerKey(k))) &&
         ((typeof v === "string" && v.length <= 256) ||
           (typeof v === "number" && Number.isFinite(v) && v >= 0) ||
           typeof v === "boolean")
@@ -190,13 +203,13 @@
       if (s.incomplete != null && typeof s.incomplete !== "boolean")
         throw Error("Invalid incomplete flag.");
       if (s.usage) {
-        for (const k of ["input_tokens", "output_tokens"])
+        for (const k of usageKeys)
           if (
             s.usage[k] != null &&
             (!Number.isFinite(s.usage[k]) || s.usage[k] < 0)
           )
             throw Error("Invalid token usage.");
-        retain(s.usage, ["input_tokens", "output_tokens"]);
+        retain(s.usage, usageKeys);
       }
     }
     const es = [],
@@ -274,7 +287,9 @@
         throw Error("Invalid capability.");
     for (const w of p.warnings || [])
       if (typeof w !== "string") throw Error("Warnings must be strings.");
-    for (const t of p.tasks)
+    for (const t of p.tasks) {
+      t.attributes = scalars(t.attributes, new Set(), true);
+      if (!Object.keys(t.attributes).length) delete t.attributes;
       retain(t, [
         "id",
         "logical_id",
@@ -289,9 +304,11 @@
         "end_reason",
         "network",
         "flags",
+        "attributes",
       ]);
+    }
     for (const s of p.spans) {
-      s.attributes = scalars(s.attributes, attributeKeys);
+      s.attributes = scalars(s.attributes, attributeKeys, true);
       retain(s, [
         "id",
         "task_id",
@@ -320,7 +337,7 @@
       ]);
     for (const c of p.capabilities || [])
       retain(c, ["name", "status", "reason"]);
-    p.configuration = scalars(p.configuration, configKeys);
+    p.configuration = scalars(p.configuration, configKeys, true);
     retain(p, [
       "schema_version",
       "run_id",

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strings"
 )
 
 const SchemaVersion = 2
@@ -39,6 +40,8 @@ type Task struct {
 	Network   *NetworkSummary `json:"network,omitempty"`
 	// Flags are loader-derived evidence-quality markers, never outcomes.
 	Flags []string `json:"flags,omitempty"`
+	// Producer-namespaced scalar metadata (see producerNamespace).
+	Attributes map[string]any `json:"attributes,omitempty"`
 }
 
 // NetworkSummary keeps aggregate browser counters only; URLs are never retained.
@@ -70,6 +73,11 @@ type Span struct {
 type Usage struct {
 	InputTokens  *float64 `json:"input_tokens,omitempty"`
 	OutputTokens *float64 `json:"output_tokens,omitempty"`
+	// Optional usage detail; missing means not recorded, never zero.
+	CacheReadTokens  *float64 `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens *float64 `json:"cache_write_tokens,omitempty"`
+	ReasoningTokens  *float64 `json:"reasoning_tokens,omitempty"`
+	CostUSD          *float64 `json:"cost_usd,omitempty"`
 }
 type Edge struct {
 	Source string `json:"source"`
@@ -115,10 +123,23 @@ func validTime(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) && v
 
 var allowedAttributes = map[string]bool{"model": true, "gen_ai.request.model": true, "gen_ai.usage.input_tokens": true, "gen_ai.usage.output_tokens": true, "tool.name": true, "exit_code": true, "synthetic": true, "phase": true, "time_quality": true, "backend": true, "harness": true, "provider": true, "resource_type": true, "http_status": true, "page": true, "agent.id": true, "bridge_role": true, "suspend_reason": true, "pause_latency_ms": true, "unpause_latency_ms": true}
 
+// Producers may retain their own scalar metadata under a registered namespace
+// prefix. Values pass the same scalar and length filter as allowlisted keys.
+var producerNamespaces = []string{"asb."}
+
+func producerNamespace(k string) bool {
+	for _, p := range producerNamespaces {
+		if strings.HasPrefix(k, p) && len(k) > len(p) && len(k) <= 128 {
+			return true
+		}
+	}
+	return false
+}
+
 func filterAttributes(attrs map[string]any) map[string]any {
 	out := map[string]any{}
 	for k, v := range attrs {
-		if !allowedAttributes[k] {
+		if !allowedAttributes[k] && !producerNamespace(k) {
 			continue
 		}
 		switch x := v.(type) {
@@ -186,6 +207,9 @@ func Validate(p *Profile) error {
 			}
 		}
 		t.Flags = flags
+		if t.Attributes = filterAttributes(t.Attributes); len(t.Attributes) == 0 {
+			t.Attributes = nil
+		}
 	}
 	spans := map[string]*Span{}
 	for i := range p.Spans {
@@ -200,7 +224,7 @@ func Validate(p *Profile) error {
 			return fmt.Errorf("invalid span timing")
 		}
 		if s.Usage != nil {
-			for _, v := range []*float64{s.Usage.InputTokens, s.Usage.OutputTokens} {
+			for _, v := range []*float64{s.Usage.InputTokens, s.Usage.OutputTokens, s.Usage.CacheReadTokens, s.Usage.CacheWriteTokens, s.Usage.ReasoningTokens, s.Usage.CostUSD} {
 				if v != nil && !validTime(*v) {
 					return fmt.Errorf("invalid token usage")
 				}
@@ -321,7 +345,7 @@ var configurationKeys = map[string]bool{"benchmark": true, "harness": true, "mod
 func filterConfiguration(in map[string]any) map[string]any {
 	out := map[string]any{}
 	for k, v := range in {
-		if !configurationKeys[k] {
+		if !configurationKeys[k] && !producerNamespace(k) {
 			continue
 		}
 		switch x := v.(type) {

@@ -249,3 +249,36 @@ func TestUnattributedSpanIsNotFabricatedAgent(t *testing.T) {
 		t.Fatal("unknown event attributed to a fabricated agent")
 	}
 }
+
+func TestProducerNamespaceAndUsageDetailSurviveValidation(t *testing.T) {
+	f := func(v float64) *float64 { return &v }
+	p := Profile{SchemaVersion: 2, RunID: "asb", DurationMS: 10,
+		Configuration: map[string]any{"asb.setting": "browser-use-webagent", "secret": "x"},
+		Tasks: []Task{{ID: "t", DurationMS: 10, Attributes: map[string]any{"asb.n_steps": 3.0, "asb.error": "boom", "prompt": "hidden", "asb.": "empty"}}},
+		Spans: []Span{{ID: "s", TaskID: "t", DurationMS: 5, Kind: "model",
+			Attributes: map[string]any{"asb.category": "LLM", "asb.list": []any{1}, "url": "http://x"},
+			Usage:      &Usage{InputTokens: f(10), CacheReadTokens: f(4), ReasoningTokens: f(2), CostUSD: f(0.01)}}},
+	}
+	if err := Validate(&p); err != nil {
+		t.Fatal(err)
+	}
+	if p.Configuration["asb.setting"] != "browser-use-webagent" || p.Configuration["secret"] != nil {
+		t.Fatalf("configuration namespace: %v", p.Configuration)
+	}
+	if a := p.Tasks[0].Attributes; a["asb.n_steps"] != 3.0 || a["asb.error"] != "boom" || a["prompt"] != nil || a["asb."] != nil {
+		t.Fatalf("task attributes: %v", a)
+	}
+	if a := p.Spans[0].Attributes; a["asb.category"] != "LLM" || a["asb.list"] != nil || a["url"] != nil {
+		t.Fatalf("span attributes: %v", a)
+	}
+	b, _ := json.Marshal(p)
+	for _, k := range []string{`"cache_read_tokens":4`, `"reasoning_tokens":2`, `"cost_usd":0.01`} {
+		if !strings.Contains(string(b), k) {
+			t.Fatalf("usage detail %s lost: %s", k, b)
+		}
+	}
+	p.Spans[0].Usage.CacheWriteTokens = f(-1)
+	if Validate(&p) == nil {
+		t.Fatal("negative usage detail accepted")
+	}
+}

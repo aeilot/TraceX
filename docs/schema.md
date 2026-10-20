@@ -7,10 +7,10 @@ All timing uses finite, nonnegative milliseconds relative to one run origin. Siz
 | Object | Fields |
 | --- | --- |
 | Profile | `schema_version: 2`, `run_id`, `name`, `duration_ms`, `tasks`, `spans`, `edges`, `resources`, `capabilities`, `warnings`, optional `configuration` |
-| Task | `id`, optional `logical_id`, `name`, `status`, `start_ms`, `duration_ms`, optional `time_quality`, separate `evaluation_status` and `cleanup_status`, optional `score` (continuous accuracy in [0, 1]), `end_reason` (lowercase enum), `network` (NetworkSummary), `flags` (`duration_outlier`, `sparse_monitor`) |
+| Task | `id`, optional `logical_id`, `name`, `status`, `start_ms`, `duration_ms`, optional `time_quality`, separate `evaluation_status` and `cleanup_status`, optional `score` (continuous accuracy in [0, 1]), `end_reason` (lowercase enum), `network` (NetworkSummary), `flags` (`duration_outlier`, `sparse_monitor`), `attributes` (producer-namespaced scalars only) |
 | NetworkSummary | optional `requests`, `failed`, `unsent`, `response_bytes`, `active_ms`, `navigations`, `by_resource_type` (allowlisted browser resource type → count; unknown types fold into `other`) |
 | Span | `id`, `task_id`, `agent_id`, optional `parent_id` and `runtime_id`, `name`, `kind`, `status`, `start_ms`, `duration_ms`, `source`, optional `attributes`, `usage`, `incomplete` |
-| Usage | optional `input_tokens`, `output_tokens`; missing and measured zero differ |
+| Usage | optional `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `reasoning_tokens`, `cost_usd`; missing and measured zero differ |
 | Edge | `source`, `target`, `kind` |
 | Resource | optional `task_id`, `component`, `runtime_id`, `time_ms`, optional `cpu_percent`, `memory_bytes`, `gpu_percent`, `memory_limit_bytes`, `memory_peak_bytes`, `pids`, `network_rx_bytes`, `network_tx_bytes` (cumulative per runtime), `cpu_throttling` (CPUThrottling) |
 | CPUThrottling | `periods`, `throttled_periods`, `throttled_us`: cumulative cgroup `cpu.stat` counters per runtime; `throttled_periods` ≤ `periods`. Omitted means throttling was not measured, never zero. Shares derive from consecutive samples of one runtime; a counter decrease is a reset and yields no share |
@@ -47,7 +47,9 @@ Lifecycle spans use `kind: lifecycle` and `attributes.phase` (`queue`, `sandbox_
 
 Configuration and attributes use explicit scalar allowlists. Configuration supports experiment conditions such as benchmark, harness, model, provider, concurrency, and independent runtime resource limits. Missing fields are unknown, not confirmed equality. See [ARIES integration](aries-integration.md) for the producer snapshot.
 
-Attributes retain selected model, usage, tool, phase, timing-quality, provider, and browser resource-type metadata. Arbitrary fields, raw errors, URLs, prompts, arguments, and outputs are not part of the export contract. Browser normalization also removes unknown object fields.
+Attributes retain selected model, usage, tool, phase, timing-quality, provider, and browser resource-type metadata.
+
+A producer may also keep its own scalar fields under a registered namespace prefix on span attributes, task attributes and configuration. The only registered prefix is `asb.` ([AgentSysBench](https://github.com/open-agent-infra/agent-sys-bench): unified-schema request, latency, io and token fields). Namespaced values pass the same filter: strings up to 256 characters, finite nonnegative numbers, booleans; keys up to 128 characters. Unregistered keys are still dropped. Arbitrary fields, raw errors, URLs, prompts, arguments, and outputs are not part of the export contract. Browser normalization also removes unknown object fields.
 
 ## Branch-and-join example
 
