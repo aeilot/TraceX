@@ -599,7 +599,7 @@ function renderAnalysis() {
       t9n("MEAN ACCURACY"),
       a.score_known ? score(a.score_mean) : "—",
       a.score_known
-        ? t9n("Recorded score.json · {known}/{total} tasks", { known: a.score_known, total: a.task_count })
+        ? t9n("Recorded scores · {known}/{total} tasks", { known: a.score_known, total: a.task_count })
         : t9n("No continuous scores recorded"),
     ],
     [t9n("PEAK WORK CONCURRENCY"), a.max_concurrency, t9n("Nested envelopes excluded")],
@@ -611,7 +611,16 @@ function renderAnalysis() {
     [
       t9n("MODEL TOKENS"),
       `${a.usage.input_tokens?.toLocaleString() ?? "—"} / ${a.usage.output_tokens?.toLocaleString() ?? "—"}`,
-      t9n("Input / output · {known}/{calls} input usage known", { known: a.usage.input_known, calls: a.usage.model_calls }),
+      [
+        t9n("Input / output · {known}/{calls} input usage known", { known: a.usage.input_known, calls: a.usage.model_calls }),
+        ...[
+          ["reasoning_tokens", "Reasoning {n}"],
+          ["cache_read_tokens", "Cache read {n}"],
+          ["cache_write_tokens", "Cache write {n}"],
+        ]
+          .filter(([k]) => Number.isFinite(a.usage[k]))
+          .map(([k, label]) => t9n(label, { n: a.usage[k].toLocaleString() })),
+      ].join(" · "),
     ],
   ]) {
     const c = html("div");

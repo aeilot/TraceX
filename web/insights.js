@@ -11,7 +11,19 @@
   const jump=reference=>window.dispatchEvent(new CustomEvent("tracex:evidence",{detail:reference}));
   const el=(tag,cls,text)=>html(tag,cls,text);
   function button(label,action) {const b=el("button","button small",t9n(label));b.type="button";b.onclick=action;return b;}
-  function referenceButton(reference,label) {const b=button(label || (reference.span_id?"Locate span":"Locate task"),()=>jump(reference));b.title=reference.span_id || reference.task_id;return b;}
+  // Name the target on the button so several references in one card stay distinguishable.
+  function referenceTarget(reference) {
+    // IDs are looked up in the open profile; a reference into another run falls back to its ID.
+    const p=state.profile,clip=s=>s.length>28?s.slice(0,27)+"…":s;
+    if(reference.task_id){const t=p?.tasks.find(x=>x.id===reference.task_id);return clip((t?.name)||reference.task_id);}
+    const s=p?.spans.find(x=>x.id===reference.span_id);
+    return s?`${clip(s.name)} · ${format(s.duration_ms)}`:clip(reference.span_id);
+  }
+  function referenceButton(reference,label) {
+    const b=label?button(label,()=>jump(reference)):button(reference.span_id?"Locate span {name}":"Locate task {name}",()=>jump(reference));
+    if(!label)b.textContent=t9n(reference.span_id?"Locate span {name}":"Locate task {name}",{name:referenceTarget(reference)});
+    b.title=reference.span_id || reference.task_id;return b;
+  }
   function grid(target,headings,rows) {
     target.replaceChildren();if(!rows.length){target.append(el("p","workspace-empty",t9n("No matching records.")));return;}
     const t=el("table"),head=el("thead"),tr=el("tr"),body=el("tbody");for(const h of headings){const th=el("th","",t9n(h));th.scope="col";tr.append(th);}head.append(tr);

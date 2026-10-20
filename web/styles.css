@@ -168,9 +168,14 @@ a {
   color: white;
 }
 .task-button .task-name {
-  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
 }
 .task-button .task-duration {
   margin-left: auto;
@@ -1241,7 +1246,9 @@ body.inspecting .workspace {
 }
 .analysis-metrics {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  /* Five metrics: one row when wide, otherwise even rows with a gap. */
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  row-gap: 20px;
   padding: 20px 0;
   border-bottom: 1px solid #edf0e8;
 }
@@ -1800,4 +1807,12 @@ body.inspecting .workspace {
   stroke: #ffffffaa;
   stroke-dasharray: 3 2;
   cursor: zoom-in;
+}
+
+.config-key.namespaced {
+  color: #8c997c;
+}
+.task-button .task-score,
+.task-button .task-duration {
+  flex-shrink: 0;
 }

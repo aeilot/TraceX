@@ -139,13 +139,20 @@
       && (status === "all" || status === "failed" && failedTask(t) || status === "succeeded" && t.status === "succeeded"));
     tasks.sort((a,b) => sort === "name" ? (a.name || a.id).localeCompare(b.name || b.id)
       : sort === "score" ? (a.score ?? Infinity) - (b.score ?? Infinity) : (b.duration_ms ?? -1) - (a.duration_ms ?? -1));
-    table("#task-results", ["Task", "Status", "Duration", "Task accuracy", "Task evaluation", "Action"], tasks.map(t => {
+    table("#task-results", ["Task", "Status", "Duration", "Accuracy", "Evaluation", "Action"], tasks.map(t => {
       const name = html("div", "record-identity"); name.append(html("strong", "", t.name || t.id));
       if (t.name && t.name !== t.id) name.append(html("small", "", t.id));
       return [name, t9n(t.status || "Unknown"), taskDuration(t), Number.isFinite(t.score) ? t.score.toFixed(3) : "—",
         t9n(t.evaluation_status || "Unknown"), button("Inspect task", () => { navigate("profiler"); resetFilters(); setTask(t.id); })];
     }));
-    table("#run-configuration", ["Condition", "Recorded value"], Object.entries(state.profile?.configuration || {}).map(([k,v]) => [k, String(v)]));
+    // Shared conditions first; producer-namespaced fields (e.g. asb.*) follow, grouped by prefix.
+    const ns = k => /^[a-z0-9_]+\./.test(k) ? k.split(".")[0] : "";
+    const conf = Object.entries(state.profile?.configuration || {}).sort(([a],[b]) => ns(a).localeCompare(ns(b)) || a.localeCompare(b));
+    table("#run-configuration", ["Condition", "Recorded value"], conf.map(([k,v]) => {
+      const key = html("span", ns(k) ? "config-key namespaced" : "config-key", k);
+      if (ns(k)) key.title = t9n("Producer-specific field ({prefix})", {prefix: ns(k)});
+      return [key, String(v)];
+    }));
   }
   let checkingRunner = false;
   async function checkRunner() {

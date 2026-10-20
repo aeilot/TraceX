@@ -494,6 +494,8 @@
             usage[n]++;
           }
         }
+        for (const k of usageKeys.slice(2))
+          if (Number.isFinite(s.usage?.[k])) usage[k] = (usage[k] ?? 0) + s.usage[k];
       }
     }
     const coverage = p.tasks.map((t) => {

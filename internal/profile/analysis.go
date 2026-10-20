@@ -28,6 +28,11 @@ type TokenTotals struct {
 	ModelCalls   int      `json:"model_calls"`
 	InputKnown   int      `json:"input_known"`
 	OutputKnown  int      `json:"output_known"`
+	// Usage detail sums over model calls that recorded them; absent when none did.
+	CacheReadTokens  *float64 `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens *float64 `json:"cache_write_tokens,omitempty"`
+	ReasoningTokens  *float64 `json:"reasoning_tokens,omitempty"`
+	CostUSD          *float64 `json:"cost_usd,omitempty"`
 }
 type CriticalPath struct {
 	Status     string   `json:"status"`
@@ -184,6 +189,22 @@ func Analyze(p Profile) Analysis {
 				}
 				*a.Usage.OutputTokens += *v
 				a.Usage.OutputKnown++
+			}
+			if u := s.Usage; u != nil {
+				for _, f := range []struct {
+					dst **float64
+					v   *float64
+				}{
+					{&a.Usage.CacheReadTokens, u.CacheReadTokens}, {&a.Usage.CacheWriteTokens, u.CacheWriteTokens},
+					{&a.Usage.ReasoningTokens, u.ReasoningTokens}, {&a.Usage.CostUSD, u.CostUSD},
+				} {
+					if f.v != nil {
+						if *f.dst == nil {
+							*f.dst = new(float64)
+						}
+						**f.dst += *f.v
+					}
+				}
 			}
 		}
 
