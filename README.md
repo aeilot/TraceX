@@ -94,11 +94,12 @@ Every launch is explicit: selecting a preset starts nothing, preparation makes n
 | OpenClaw | Native sessions, explicitly matched tool-call intervals, model completion usage, and bridge evidence |
 | BrowserBench | Browser request/page intervals; URL, body, and query content omitted |
 | [AgentSysBench](https://github.com/open-agent-infra/agent-sys-bench) | Normalized JSON from the bundled [adapter](adapters/agentsysbench/README.md): fast-service call trees, per-call token usage (including cache and reasoning tokens and cost), IO sizes, rewards, and container resources; every source field kept under `asb.` metadata |
+| [TraceLab](https://github.com/uw-syfi/TraceLab) | Event streams from the bundled [adapter](adapters/tracelab/README.md): real Claude Code and Codex sessions (52 developers) with turns, waits for the human, LLM rounds with token usage, and tool calls; every source field kept under `tracelab.` metadata |
 | Other backends | Versioned normalized JSON or append-only events |
 
 Older runs cannot recover measurements they never recorded. In particular, a model completion with no start time is displayed as a marker with unavailable duration. Existing ARIES runs show task intervals, while full phase boundaries require the [ARIES instrumentation integration](docs/aries-integration.md). Cross-process clock synchronization is not verified. BrowserBench sandbox timing retains its source-integrity warning.
 
-Producers can keep source-specific scalar fields under a registered namespace (currently `asb.`) on spans, tasks and configuration; span details show them as recorded metadata, and configuration lists them after the shared conditions. Model usage may carry cache-read, cache-write and reasoning tokens and cost, which the overview sums when recorded.
+Producers can keep source-specific scalar fields under a registered namespace (currently `asb.` and `tracelab.`) on spans, tasks and configuration; span details show them as recorded metadata, and configuration lists them after the shared conditions. Model usage may carry cache-read, cache-write and reasoning tokens and cost, which the overview sums when recorded.
 
 See [inputs and measurement limits](docs/inputs.md), [schema](docs/schema.md), [event producers](docs/events.md), and [architecture](docs/architecture.md).
 

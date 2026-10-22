@@ -271,6 +271,18 @@ func TestProducerNamespaceAndUsageDetailSurviveValidation(t *testing.T) {
 	if a := p.Spans[0].Attributes; a["asb.category"] != "LLM" || a["asb.list"] != nil || a["url"] != nil {
 		t.Fatalf("span attributes: %v", a)
 	}
+	q := Profile{SchemaVersion: 2, RunID: "tracelab", DurationMS: 10,
+		Configuration: map[string]any{"tracelab.release": "v0.0.2", "tracelabx": "x"},
+		Tasks:         []Task{{ID: "t", DurationMS: 10, Attributes: map[string]any{"tracelab.provider": "codex", "tracelab.": "empty"}}},
+		Spans:         []Span{{ID: "s", TaskID: "t", DurationMS: 5, Kind: "tool", Attributes: map[string]any{"tracelab.tool.result_chars": 12.0}}}}
+	if err := Validate(&q); err != nil {
+		t.Fatal(err)
+	}
+	if q.Configuration["tracelab.release"] != "v0.0.2" || q.Configuration["tracelabx"] != nil ||
+		q.Tasks[0].Attributes["tracelab.provider"] != "codex" || q.Tasks[0].Attributes["tracelab."] != nil ||
+		q.Spans[0].Attributes["tracelab.tool.result_chars"] != 12.0 {
+		t.Fatalf("tracelab namespace: %v %v %v", q.Configuration, q.Tasks[0].Attributes, q.Spans[0].Attributes)
+	}
 	b, _ := json.Marshal(p)
 	for _, k := range []string{`"cache_read_tokens":4`, `"reasoning_tokens":2`, `"cost_usd":0.01`} {
 		if !strings.Contains(string(b), k) {

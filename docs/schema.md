@@ -49,7 +49,7 @@ Configuration and attributes use explicit scalar allowlists. Configuration suppo
 
 Attributes retain selected model, usage, tool, phase, timing-quality, provider, and browser resource-type metadata.
 
-A producer may also keep its own scalar fields under a registered namespace prefix on span attributes, task attributes and configuration. The only registered prefix is `asb.` ([AgentSysBench](https://github.com/open-agent-infra/agent-sys-bench): unified-schema request, latency, io and token fields). Namespaced values pass the same filter: strings up to 256 characters, finite nonnegative numbers, booleans; keys up to 128 characters. Unregistered keys are still dropped. Arbitrary fields, raw errors, URLs, prompts, arguments, and outputs are not part of the export contract. Browser normalization also removes unknown object fields.
+A producer may also keep its own scalar fields under a registered namespace prefix on span attributes, task attributes and configuration. The registered prefixes are `asb.` ([AgentSysBench](https://github.com/open-agent-infra/agent-sys-bench): unified-schema request, latency, io and token fields) and `tracelab.` ([TraceLab](https://github.com/uw-syfi/TraceLab): session, LLM-round, timing-event and tool fields). Namespaced values pass the same filter: strings up to 256 characters, finite nonnegative numbers, booleans; keys up to 128 characters. Unregistered keys are still dropped. Arbitrary fields, raw errors, URLs, prompts, arguments, and outputs are not part of the export contract. Browser normalization also removes unknown object fields.
 
 ## Branch-and-join example
 

@@ -125,7 +125,7 @@ var allowedAttributes = map[string]bool{"model": true, "gen_ai.request.model": t
 
 // Producers may retain their own scalar metadata under a registered namespace
 // prefix. Values pass the same scalar and length filter as allowlisted keys.
-var producerNamespaces = []string{"asb."}
+var producerNamespaces = []string{"asb.", "tracelab."}
 
 func producerNamespace(k string) bool {
 	for _, p := range producerNamespaces {

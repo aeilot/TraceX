@@ -268,13 +268,13 @@ test("timeline layout bounds lane rows with an overflow row, like the server", (
 test("producer namespace metadata and usage detail survive import", () => {
   const p = fixture();
   p.schema_version = 2;
-  p.configuration = { "asb.setting": "qa-rag", secret: "x" };
-  p.tasks[0].attributes = { "asb.n_steps": 3, prompt: "hidden" };
+  p.configuration = { "asb.setting": "qa-rag", "tracelab.release": "v0.0.2", secret: "x" };
+  p.tasks[0].attributes = { "asb.n_steps": 3, "tracelab.provider": "codex", prompt: "hidden" };
   p.spans[1].attributes = { "asb.category": "Sandbox", url: "http://x" };
   p.spans[1].usage = { input_tokens: 5, cache_read_tokens: 2, cost_usd: 0.1, raw: 1 };
   const v = validate(p);
-  assert.deepEqual(v.configuration, { "asb.setting": "qa-rag" });
-  assert.deepEqual(v.tasks[0].attributes, { "asb.n_steps": 3 });
+  assert.deepEqual(v.configuration, { "asb.setting": "qa-rag", "tracelab.release": "v0.0.2" });
+  assert.deepEqual(v.tasks[0].attributes, { "asb.n_steps": 3, "tracelab.provider": "codex" });
   assert.deepEqual(v.spans[1].attributes, { "asb.category": "Sandbox" });
   assert.deepEqual(v.spans[1].usage, { input_tokens: 5, cache_read_tokens: 2, cost_usd: 0.1 });
 });

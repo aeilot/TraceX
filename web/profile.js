@@ -21,7 +21,7 @@
     "bridge_role",
   ]);
   // Producer-namespaced scalar metadata, matching producerNamespaces in Go.
-  const producerNamespaces = ["asb."];
+  const producerNamespaces = ["asb.", "tracelab."];
   const producerKey = (k) =>
     k.length <= 128 &&
     producerNamespaces.some((p) => k.startsWith(p) && k.length > p.length);
